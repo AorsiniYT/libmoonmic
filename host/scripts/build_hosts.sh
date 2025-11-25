@@ -50,7 +50,7 @@ echo "=== Building MoonMic Host Applications ==="
 echo "--- Building for Linux ---"
 mkdir -p "$HOST_SOURCE_DIR/build-linux"
 cd "$HOST_SOURCE_DIR/build-linux"
-cmake .. -DCMAKE_BUILD_TYPE=Release -DHOST_TARGET_LINUX=ON
+cmake .. -DCMAKE_BUILD_TYPE=Release -DHOST_TARGET_LINUX=ON -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_TOOLCHAIN_FILE=""
 make -j$(nproc)
 cp moonmic-host "$OUTPUT_DIR/linux/"
 echo "Linux build complete: $OUTPUT_DIR/linux/moonmic-host"

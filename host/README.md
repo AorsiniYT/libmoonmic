@@ -123,8 +123,8 @@ Automatically installs VB-CABLE driver with UAC elevation.
 ## Configuration
 
 Default config location:
-- **Windows**: `%APPDATA%\MoonMic\moonmic-host.json`
-- **Linux**: `~/.config/moonmic/moonmic-host.json`
+- **Windows**: `%APPDATA%\AorsiniYT\MoonMic\moonmic-host.json`
+- **Linux**: `~/.config/AorsiniYT/MoonMic/moonmic-host.json`
 
 Example configuration:
 

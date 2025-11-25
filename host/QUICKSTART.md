@@ -1,40 +1,44 @@
-# MoonMic Host - Quick Start Guide
+# MoonMic Host - Quick Start Guide by AorsiniYT
 
-## 1. Create Configuration File (Optional)
+## 1. Configuration (Automatic)
 
-The program works with default settings, but if you want to customize:
+**The application creates configuration automatically on first run!**
 
-**Windows:**
-```cmd
-mkdir "%APPDATA%\MoonMic"
-copy config\moonmic-host.json.example "%APPDATA%\MoonMic\moonmic-host.json"
-```
+Configuration is saved to:
+- **Windows**: `%APPDATA%\AorsiniYT\MoonMic\moonmic-host.json`
+- **Linux**: `~/.config/AorsiniYT/MoonMic/moonmic-host.json`
 
-**Linux:**
-```bash
-mkdir -p ~/.config/moonmic
-cp config/moonmic-host.json.example ~/.config/moonmic/moonmic-host.json
-```
+Settings automatically save when changed in the GUI. You rarely need to edit manually.
 
-## 2. Install VB-CABLE (Windows Only)
+## 2. Install VB-CABLE (Windows Only - First Time)
 
-### Option A: Automatic Installation
+**All driver files are embedded in `moonmic-host.exe`! No need for separate downloads.**
+
+### Option A: GUI Installation (Easiest)
+1. Run `moonmic-host.exe`
+2. Look for the driver status section in the GUI
+3. If VB-CABLE is not installed, click **"Install VB-CABLE Driver"** button
+4. Click OK when prompted for admin rights
+5. Wait for installation to complete
+6. **Reboot your PC** (required)
+
+### Option B: Command Line
 ```cmd
 moonmic-host.exe --install-driver
 ```
 
-### Option B: Manual Installation
-
-1. Navigate to the `driver/` folder
-2. Run `VBCABLE_Setup_x64.exe` as Administrator
-3. Follow the installation wizard
-4. **Reboot your PC** (required)
+The installer will:
+- Extract embedded driver files to a temporary location
+- Run the VB-CABLE installer
+- Clean up temporary files automatically
 
 ### Verify Installation
 
 After rebooting, check Windows Sound Settings:
 - **Output**: You should see "CABLE Input (VB-Audio Virtual Cable)"
 - **Input**: You should see "CABLE Output (VB-Audio Virtual Cable)"
+
+> **Note**: The moonmic-host GUI will show "[OK] VB-CABLE Installed" if successful.
 
 ## 3. Run moonmic-host
 

@@ -1,134 +1,255 @@
-# libmoonmic - Integración con vita-moonlight
+# libmoonmic - Integration Guide
 
-## Compilación
+This guide explains how to integrate libmoonmic into vita-moonlight and other Moonlight clients.
 
-La biblioteca se compila automáticamente con vita-moonlight:
+## Building
+
+The library builds automatically with vita-moonlight:
 
 ```bash
 cd /mnt/i/vita/Proyecto/vita-moonlight
 mkdir -p build && cd build
 
-# Para PS Vita
+# For PS Vita
 cmake -DCMAKE_TOOLCHAIN_FILE=$VITASDK/share/vita.toolchain.cmake ..
 make
 
-# Para Windows (MinGW)
+# For Windows (MinGW cross-compile)
 cmake -DCMAKE_TOOLCHAIN_FILE=... ..
 make
 
-# Para Linux
+# For Linux native
 cmake ..
 make
 ```
 
-## Dependencias
+## Dependencies
 
 ### PS Vita
-- **Opus**: Incluido en VITASDK
-- **SceAudio**: Incluido en VITASDK
+- **Opus**: Included in VITASDK
+- **SceAudio**: Included in VITASDK
 
 ### Windows
-- **Opus**: Descargar de https://opus-codec.org/ o usar vcpkg
-- **WASAPI**: Incluido en Windows SDK
+- **Opus**: Submodule included (builds from source)
+- **WASAPI**: Included in Windows SDK
 
 ### Linux
 ```bash
 sudo apt-get install libopus-dev libpulse-dev
 ```
 
-## Uso Básico
+## Basic Usage
 
 ```cpp
 #include "moonmic.h"
 
-// Configuración
+// Configuration
 moonmic_config_t config = {
-    .host_ip = "192.168.1.100",
-    .port = 48100,
-    .sample_rate = 48000,
-    .channels = 1,
-    .bitrate = 64000,
-    .auto_start = true
+    .host_ip = "192.168.1.100",  // Your PC's IP address
+    .port = 48100,               // Default moonmic-host port
+    .sample_rate = 48000,        // 48kHz recommended
+    .channels = 1,               // Mono (1) or Stereo (2)
+    .bitrate = 64000,            // 64 kbps for mono, 96 kbps for stereo
+    .auto_start = true           // Start transmitting immediately
 };
 
-// Crear y iniciar
+// Create and start
 moonmic_client_t* mic = moonmic_create(&config);
 if (mic) {
-    // Ya está transmitiendo (auto_start = true)
+    // Already transmitting if auto_start = true
     
-    // Detener cuando sea necesario
+    // Stop when needed
     moonmic_stop(mic);
     moonmic_destroy(mic);
 }
 ```
 
-## Integración con GameStreamClient
+## Integration with GameStreamClient
 
-Ver `examples/integration_example.cpp` para un ejemplo completo.
+See `examples/integration_example.cpp` for a complete example.
 
-Pasos básicos:
+Basic integration steps:
 
-1. Incluir header: `#include "moonmic.h"`
-2. Crear instancia al iniciar sesión
-3. Destruir al cerrar sesión
+1. Include header: `#include "moonmic.h"`
+2. Create instance when streaming session starts
+3. Destroy when session ends
+4. Handle errors via callbacks
+
+Example:
+```cpp
+class GameStreamClient {
+    moonmic_client_t* microphone_;
+    
+    void startStreaming(const char* host_ip) {
+        moonmic_config_t config = {
+            .host_ip = host_ip,
+            .port = 48100,
+            .sample_rate = 48000,
+            .channels = 1,
+            .bitrate = 64000,
+            .auto_start = true
+        };
+        
+        microphone_ = moonmic_create(&config);
+        moonmic_set_error_callback(microphone_, on_mic_error, this);
+        moonmic_set_status_callback(microphone_, on_mic_status, this);
+    }
+    
+    void stopStreaming() {
+        if (microphone_) {
+            moonmic_destroy(microphone_);
+            microphone_ = nullptr;
+        }
+    }
+    
+    static void on_mic_error(const char* error, void* userdata) {
+        printf("[Microphone] Error: %s\n", error);
+    }
+    
+    static void on_mic_status(bool connected, void* userdata) {
+        printf("[Microphone] Status: %s\n", connected ? "Active" : "Inactive");
+    }
+};
+```
 
 ## Callbacks
 
 ```cpp
 void error_callback(const char* error, void* userdata) {
-    printf("Error: %s\n", error);
+    printf("Microphone error: %s\n", error);
 }
 
 void status_callback(bool connected, void* userdata) {
-    printf("Status: %s\n", connected ? "Connected" : "Disconnected");
+    printf("Microphone status: %s\n", connected ? "Connected" : "Disconnected");
 }
 
 moonmic_set_error_callback(mic, error_callback, NULL);
 moonmic_set_status_callback(mic, status_callback, NULL);
 ```
 
-## Configuración del Host
+## Host Setup
 
-En el host, debe estar ejecutándose `moonmic-host` (ver proyecto separado).
+On the host PC, run `moonmic-host` application:
 
+### Windows
 ```bash
-# Linux
-moonmic-host --config /etc/moonmic.conf
+# Download from releases or build from source
+moonmic-host.exe
 
-# Windows
-moonmic-host.exe --config moonmic.conf
+# First-time setup: Install VB-CABLE driver
+moonmic-host.exe --install-driver
+
+# Or use the GUI "Install VB-CABLE Driver" button
 ```
 
-## Solución de Problemas
+### Linux
+```bash
+cd host
+mkdir build && cd build
+cmake ..
+make
 
-### No se escucha audio
+./moonmic-host
+```
 
-1. Verificar que `moonmic-host` está ejecutándose
-2. Verificar firewall (puerto 48100 UDP)
-3. Verificar IP del host en configuración
+**Configuration is automatic:**
+- Windows: `%APPDATA%\AorsiniYT\MoonMic\moonmic-host.json`
+- Linux: `~/.config/AorsiniYT/MoonMic/moonmic-host.json`
+- Auto-saves when changed in GUI
+- Syncs with Sunshine paired clients if enabled
 
-### Alta latencia
+## Troubleshooting
 
-1. Reducir `buffer_size_ms` en configuración del host
-2. Verificar red (ping al host)
-3. Usar conexión cableada si es posible
+### No audio received
 
-### Errores de compilación
+1. **Verify moonmic-host is running** on the PC
+2. **Check firewall** - UDP port 48100 must be open
+3. **Verify IP address** in client configuration matches PC IP
+4. **On Windows**: Ensure VB-CABLE is installed (`moonmic-host.exe --install-driver`)
+5. **Test with verbose logging**:
+   ```cpp
+   moonmic_set_error_callback(mic, verbose_error_handler, NULL);
+   ```
 
-**PS Vita**: Asegurar que VITASDK está correctamente instalado
-**Windows**: Verificar que Opus está en el PATH
-**Linux**: Instalar `libopus-dev` y `libpulse-dev`
+### High latency
 
-## API Completa
+1. **Reduce buffer size** in host configuration (edit `moonmic-host.json`)
+2. **Check network latency** with `ping` to host
+3. **Use wired connection** instead of WiFi if possible
+4. **Disable QoS/traffic shaping** on router
 
-Ver `moonmic.h` para documentación completa de la API.
+### Build errors
 
-Funciones principales:
-- `moonmic_create()` - Crear instancia
-- `moonmic_destroy()` - Destruir instancia
-- `moonmic_start()` - Iniciar transmisión
-- `moonmic_stop()` - Detener transmisión
-- `moonmic_is_active()` - Verificar estado
-- `moonmic_set_error_callback()` - Callback de errores
-- `moonmic_set_status_callback()` - Callback de estado
-- `moonmic_version()` - Versión de la biblioteca
+**PS Vita**
+- Ensure `VITASDK` environment variable is set
+- Run `source /usr/local/vitasdk/vitasdk.sh`
+
+**Windows (Cross-compile)**
+- Opus is built from submodule automatically
+- Ensure MinGW toolchain is installed
+
+**Linux**
+```bash
+# Install dependencies
+sudo apt-get install libopus-dev libpulse-dev
+
+# If using GLFW for host builds
+sudo apt-get install libglfw3-dev libgl1-mesa-dev
+```
+
+### Runtime errors
+
+**"Failed to open audio device"** (PS Vita)
+- Check that no other app is using the microphone
+- Ensure `sceAudioInOpenPort` is not failing (check logs)
+
+**"Network error: sendto failed"** 
+- Check firewall settings on both client and host
+- Verify network connectivity between devices
+- Ensure port 48100 UDP is not blocked
+
+## Complete API Reference
+
+See `moonmic.h` for full API documentation.
+
+### Core Functions
+
+- `moonmic_create(config)` - Create microphone instance
+- `moonmic_destroy(mic)` - Destroy instance and free resources
+- `moonmic_start(mic)` - Start audio transmission
+- `moonmic_stop(mic)` - Stop audio transmission
+- `moonmic_is_active(mic)` - Check if transmitting
+- `moonmic_version()` - Get library version string
+
+### Callbacks
+
+- `moonmic_set_error_callback(mic, callback, userdata)` - Set error handler
+- `moonmic_set_status_callback(mic, callback, userdata)` - Set status change handler
+
+### Configuration Structure
+
+```c
+typedef struct moonmic_config {
+    const char* host_ip;      // Host PC IP address
+    int port;                 // UDP port (default: 48100)
+    int sample_rate;          // Sample rate in Hz (default: 48000)
+    int channels;             // 1 = mono, 2 = stereo
+    int bitrate;              // Opus bitrate in bps (default: 64000)
+    bool auto_start;          // Start immediately after creation
+} moonmic_config_t;
+```
+
+## Performance Tips
+
+- **Use mono (1 channel)** unless stereo is required - saves bandwidth
+- **48kHz sample rate** is recommended for best quality/performance balance
+- **64 kbps bitrate** for mono is sufficient for voice
+- **Enable auto_start** to simplify client code
+- **Use error callbacks** to handle network issues gracefully
+
+## Credits
+
+- **VB-Audio Software** - VB-CABLE virtual audio driver (https://vb-audio.com/Cable/)
+- **Xiph.Org Foundation** - Opus audio codec  
+- **Dear ImGui** - Host application GUI
+- **AorsiniYT** - moonmic-host application and integration

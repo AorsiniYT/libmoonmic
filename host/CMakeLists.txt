@@ -182,9 +182,8 @@ elseif(HOST_TARGET_LINUX OR (UNIX AND NOT APPLE AND NOT HOST_TARGET_WINDOWS))
     target_link_libraries(moonmic-host PRIVATE ${PULSEAUDIO_LIBRARIES})
     target_include_directories(moonmic-host PRIVATE ${PULSEAUDIO_INCLUDE_DIRS})
     
-    # GLFW for ImGui
+    # GLFW for ImGui - use embedded submodule
     if(USE_IMGUI)
-        find_package(glfw3 REQUIRED)
         find_package(OpenGL REQUIRED)
         target_link_libraries(moonmic-host PRIVATE glfw OpenGL::GL ${CMAKE_DL_LIBS})
     endif()

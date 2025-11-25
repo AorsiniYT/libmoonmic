@@ -1,0 +1,1 @@
+#define PACKAGE_VERSION "1.5.2-340-g6f00d6d4"

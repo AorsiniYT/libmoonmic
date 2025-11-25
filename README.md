@@ -79,12 +79,17 @@ libmoonmic/
 ### Host Application (moonmic-host)
 
 - ✅ Cross-platform (Windows, Linux)
+- ✅ **Standalone executable** - No external dependencies (drivers embedded on Windows)
+- ✅ **Single instance** - Prevents multiple copies with window bring-to-front
 - ✅ Dear ImGui GUI + console mode
-- ✅ Sunshine integration (paired clients whitelist)
-- ✅ VB-CABLE driver integration (Windows)
-- ✅ Virtual audio device injection
-- ✅ Real-time statistics
-- ✅ Automatic driver installation
+- ✅ **Auto-save configuration** - Changes persist automatically
+- ✅ Sunshine integration (paired clients whitelist sync)
+- ✅ **VB-CABLE embedded** - All driver files included in .exe (Windows)
+- ✅ **One-click driver installation** - GUI button or `--install-driver` command
+- ✅ Virtual audio device injection (WASAPI/PulseAudio)
+- ✅ Real-time statistics and connection monitoring
+- ✅ **Admin privilege handling** - Automatic UAC elevation when needed
+- ✅ **Custom icon** - Professional branding
 
 ## Quick Start
 
@@ -110,6 +115,18 @@ moonmic_destroy(mic);
 
 ### Host Application
 
+**Windows (Standalone - 7.9 MB)**
+```bash
+# Download latest release or build from source
+moonmic-host.exe
+
+# Install VB-CABLE driver (first-time setup)
+moonmic-host.exe --install-driver
+
+# Or use GUI - click "Install VB-CABLE Driver" button
+```
+
+**Linux**
 ```bash
 cd host
 mkdir build && cd build
@@ -118,10 +135,13 @@ make
 
 # Run
 ./moonmic-host
-
-# Install VB-CABLE driver (Windows only)
-./moonmic-host --install-driver
 ```
+
+**Configuration**
+- Windows: `%APPDATA%\AorsiniYT\MoonMic\moonmic-host.json`
+- Linux: `~/.config/AorsiniYT/MoonMic/moonmic-host.json`
+- Auto-saves on changes (GUI toggle, brightness settings, etc.)
+- Syncs with Sunshine paired clients automatically
 
 ## Audio Protocol
 
