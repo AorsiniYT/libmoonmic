@@ -1,0 +1,23 @@
+{
+  "server": {
+    "port": 48100,
+    "bind_address": "0.0.0.0"
+  },
+  "audio": {
+    "virtual_device_name": "MoonMic Virtual Microphone",
+    "sample_rate": 48000,
+    "channels": 1,
+    "buffer_size_ms": 20
+  },
+  "security": {
+    "enable_whitelist": true,
+    "sync_with_sunshine": true,
+    "sunshine_state_file": "",
+    "allowed_clients": []
+  },
+  "gui": {
+    "show_on_startup": true,
+    "minimize_to_tray": true,
+    "theme": "dark"
+  }
+}

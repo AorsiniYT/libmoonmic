@@ -1,0 +1,186 @@
+cmake_minimum_required(VERSION 3.10)
+
+project(libmoonmic VERSION 1.0.0)
+
+# Options
+option(BUILD_CLIENT "Build client library" ON)
+option(BUILD_HOST "Build host application" ON)
+option(BUILD_HOST_WINDOWS "Build Windows host (cross-compile)" OFF)
+option(BUILD_HOST_LINUX "Build Linux host (cross-compile)" OFF)
+
+# ============================================================================
+# CLIENT LIBRARY
+# ============================================================================
+
+if(BUILD_CLIENT)
+    message(STATUS "=== Building libmoonmic client library ===")
+    
+    # Build as static library
+    add_library(libmoonmic STATIC
+        moonmic_client.cpp
+        codec/opus_encoder.cpp
+        network/udp_sender.cpp
+    )
+    
+    # Add platform-specific sources
+    if(PLATFORM_PSV OR CMAKE_SYSTEM_NAME STREQUAL "Vita")
+        message(STATUS "libmoonmic: Building for PS Vita")
+        target_sources(libmoonmic PRIVATE platform/psvita/audio_capture_vita.cpp)
+        target_link_libraries(libmoonmic PUBLIC SceAudio_stub SceAudioIn_stub)
+        target_compile_definitions(libmoonmic PRIVATE __vita__)
+        
+    elseif(WIN32)
+        message(STATUS "libmoonmic: Building for Windows")
+        target_sources(libmoonmic PRIVATE platform/windows/audio_capture_windows.cpp)
+        target_link_libraries(libmoonmic PUBLIC winmm ole32)
+        
+    elseif(UNIX AND NOT APPLE)
+        message(STATUS "libmoonmic: Building for Linux")
+        target_sources(libmoonmic PRIVATE platform/linux/audio_capture_linux.cpp)
+        
+        # Find PulseAudio
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(PULSEAUDIO REQUIRED libpulse-simple)
+        target_link_libraries(libmoonmic PUBLIC ${PULSEAUDIO_LIBRARIES})
+        target_include_directories(libmoonmic PRIVATE ${PULSEAUDIO_INCLUDE_DIRS})
+        
+    elseif(APPLE)
+        message(STATUS "libmoonmic: macOS support not yet implemented")
+        # TODO: Implement platform/macos/audio_capture_macos.cpp
+        
+    elseif(ANDROID)
+        message(STATUS "libmoonmic: Android support not yet implemented")
+        # TODO: Implement platform/android/audio_capture_android.cpp
+        
+    else()
+        message(FATAL_ERROR "libmoonmic: Unsupported platform")
+    endif()
+    
+    # Find Opus library
+    find_package(PkgConfig)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(OPUS opus)
+    endif()
+    
+    if(OPUS_FOUND)
+        message(STATUS "libmoonmic: Found Opus via pkg-config")
+        target_link_libraries(libmoonmic PUBLIC ${OPUS_LIBRARIES})
+        target_include_directories(libmoonmic PRIVATE ${OPUS_INCLUDE_DIRS})
+    else()
+        # Fallback: try to find opus library directly
+        find_library(OPUS_LIBRARY NAMES opus)
+        find_path(OPUS_INCLUDE_DIR opus/opus.h)
+        
+        if(OPUS_LIBRARY AND OPUS_INCLUDE_DIR)
+            message(STATUS "libmoonmic: Found Opus library: ${OPUS_LIBRARY}")
+            target_link_libraries(libmoonmic PUBLIC ${OPUS_LIBRARY})
+            target_include_directories(libmoonmic PRIVATE ${OPUS_INCLUDE_DIR})
+        else()
+            message(WARNING "libmoonmic: Opus library not found. Please install libopus-dev or equivalent.")
+            message(WARNING "  - Debian/Ubuntu: sudo apt-get install libopus-dev")
+            message(WARNING "  - Fedora/RHEL: sudo dnf install opus-devel")
+            message(WARNING "  - Windows: Download from https://opus-codec.org/")
+            message(WARNING "  - PS Vita: Should be included in VITASDK")
+        endif()
+    endif()
+    
+    # Public headers
+    target_include_directories(libmoonmic PUBLIC 
+        ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    
+    # Private headers
+    target_include_directories(libmoonmic PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/codec
+        ${CMAKE_CURRENT_SOURCE_DIR}/network
+        ${CMAKE_CURRENT_SOURCE_DIR}/platform
+    )
+    
+    # C++17 standard
+    set_target_properties(libmoonmic PROPERTIES CXX_STANDARD 17)
+    
+    # Platform-specific networking libraries
+    if(WIN32)
+        target_link_libraries(libmoonmic PUBLIC ws2_32)
+    endif()
+    
+    # Threading support
+    find_package(Threads REQUIRED)
+    target_link_libraries(libmoonmic PUBLIC Threads::Threads)
+    
+    # Installation (optional, for standalone use)
+    install(TARGETS libmoonmic
+        ARCHIVE DESTINATION lib
+        LIBRARY DESTINATION lib
+    )
+    
+    install(FILES moonmic.h
+        DESTINATION include
+    )
+endif()
+
+# ============================================================================
+# HOST APPLICATION
+# ============================================================================
+
+if(BUILD_HOST)
+    message(STATUS "=== Building moonmic-host application ===")
+    
+    # Determine which hosts to build
+    set(BUILD_HOSTS "")
+    
+    if(BUILD_HOST_WINDOWS)
+        list(APPEND BUILD_HOSTS "windows")
+    endif()
+    
+    if(BUILD_HOST_LINUX)
+        list(APPEND BUILD_HOSTS "linux")
+    endif()
+    
+    # If no specific host selected, build for current platform
+    if(NOT BUILD_HOSTS)
+        if(WIN32)
+            list(APPEND BUILD_HOSTS "windows")
+        elseif(UNIX AND NOT APPLE)
+            list(APPEND BUILD_HOSTS "linux")
+        endif()
+    endif()
+    
+    # Build each host
+    foreach(HOST_PLATFORM ${BUILD_HOSTS})
+        message(STATUS "Configuring host for: ${HOST_PLATFORM}")
+        
+        # Set output directory
+        set(HOST_OUTPUT_DIR "${CMAKE_BINARY_DIR}/host-${HOST_PLATFORM}")
+        
+        # Add subdirectory with custom binary dir
+        add_subdirectory(host ${HOST_OUTPUT_DIR})
+        
+        # Set platform-specific variables for host build
+        if(HOST_PLATFORM STREQUAL "windows")
+            set(HOST_TARGET_WINDOWS ON CACHE BOOL "" FORCE)
+            set(HOST_TARGET_LINUX OFF CACHE BOOL "" FORCE)
+        elseif(HOST_PLATFORM STREQUAL "linux")
+            set(HOST_TARGET_WINDOWS OFF CACHE BOOL "" FORCE)
+            set(HOST_TARGET_LINUX ON CACHE BOOL "" FORCE)
+        endif()
+    endforeach()
+endif()
+
+# ============================================================================
+# SUMMARY
+# ============================================================================
+
+message(STATUS "")
+message(STATUS "=== libmoonmic Build Configuration ===")
+message(STATUS "Client library: ${BUILD_CLIENT}")
+message(STATUS "Host application: ${BUILD_HOST}")
+if(BUILD_HOST)
+    message(STATUS "Host platforms: ${BUILD_HOSTS}")
+    message(STATUS "Output directories:")
+    foreach(HOST_PLATFORM ${BUILD_HOSTS})
+        message(STATUS "  - ${CMAKE_BINARY_DIR}/host-${HOST_PLATFORM}")
+    endforeach()
+endif()
+message(STATUS "======================================")
+message(STATUS "")
