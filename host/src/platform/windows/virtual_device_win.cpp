@@ -3,8 +3,10 @@
  * @brief Windows virtual audio device using VB-CABLE
  */
 
+
 #include "../virtual_device.h"
 #include "driver_installer.h"
+#define INIT GUID  // Define GUIDs in this compilation unit
 #include <windows.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
@@ -19,7 +21,11 @@ public:
         : audio_client_(nullptr)
         , render_client_(nullptr)
         , buffer_frame_count_(0) {
-        CoInitializeEx(NULL, COINIT_MULTITHREADED);
+        // Initialize COM - ignore RPC_E_CHANGED_MODE if already initialized with different mode
+        HRESULT hr = CoInitialize(NULL);
+        if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) {
+            std::cerr << "[VirtualDevice] Failed to initialize COM: 0x" << std::hex << hr << std::endl;
+        }
     }
     
     ~VirtualDeviceWindows() override {
@@ -191,16 +197,23 @@ private:
             (void**)&enumerator
         );
         
-        if (FAILED(hr)) return NULL;
+        if (FAILED(hr)) {
+            std::cerr << "[VirtualDevice] Failed to create device enumerator" << std::endl;
+            return NULL;
+        }
         
         hr = enumerator->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &collection);
         if (FAILED(hr)) {
+            std::cerr << "[VirtualDevice] Failed to enumerate audio endpoints" << std::endl;
             enumerator->Release();
             return NULL;
         }
         
         UINT count;
         collection->GetCount(&count);
+        
+        std::cout << "[VirtualDevice] Searching for device: '" << target_name << "'" << std::endl;
+        std::cout << "[VirtualDevice] Found " << count << " render devices" << std::endl;
         
         IMMDevice* result = NULL;
         
@@ -222,7 +235,11 @@ private:
                         std::wstring wname(var_name.pwszVal);
                         std::string name(wname.begin(), wname.end());
                         
-                        if (name.find(target_name) != std::string::npos) {
+                        std::cout << "[VirtualDevice]   Device " << i << ": '" << name << "'" << std::endl;
+                        
+                        // Try exact match first, then substring match
+                        if (name == target_name || name.find(target_name) != std::string::npos) {
+                            std::cout << "[VirtualDevice] MATCH! Using device: '" << name << "'" << std::endl;
                             result = device;
                             result->AddRef();
                         }
@@ -236,6 +253,10 @@ private:
             }
             
             if (result) break;
+        }
+        
+        if (!result) {
+            std::cerr << "[VirtualDevice] No matching device found for: '" << target_name << "'" << std::endl;
         }
         
         collection->Release();

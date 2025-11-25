@@ -56,7 +56,7 @@ static void* moonmic_worker_thread(void* arg) {
         }
         
         // Encode with Opus
-        int encoded_bytes = opus_encoder_encode(
+        int encoded_bytes = moonmic_opus_encoder_encode(
             client->encoder,
             pcm_buffer,
             frames_read,
@@ -147,7 +147,7 @@ moonmic_client_t* moonmic_create(const moonmic_config_t* config) {
     }
     
     // Create Opus encoder
-    client->encoder = opus_encoder_create(
+    client->encoder = moonmic_opus_encoder_create(
         client->config.sample_rate,
         client->config.channels,
         client->config.bitrate
@@ -162,7 +162,7 @@ moonmic_client_t* moonmic_create(const moonmic_config_t* config) {
     // Create UDP sender
     client->sender = udp_sender_create(client->config.host_ip, client->config.port);
     if (!client->sender) {
-        opus_encoder_destroy(client->encoder);
+        moonmic_opus_encoder_destroy(client->encoder);
         client->capture->close(client->capture);
         free(client->capture);
         free(client);
@@ -188,7 +188,7 @@ void moonmic_destroy(moonmic_client_t* client) {
         udp_sender_destroy(client->sender);
     }
     if (client->encoder) {
-        opus_encoder_destroy(client->encoder);
+        moonmic_opus_encoder_destroy(client->encoder);
     }
     if (client->capture) {
         client->capture->close(client->capture);

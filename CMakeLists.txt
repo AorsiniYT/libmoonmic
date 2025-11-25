@@ -120,6 +120,25 @@ if(BUILD_CLIENT)
 endif()
 
 # ============================================================================
+# HOST APPLICATIONS (Cross-compile helper)
+# ============================================================================
+
+if(BUILD_HOST AND (PLATFORM_PSV OR CMAKE_SYSTEM_NAME STREQUAL "Vita"))
+    message(STATUS "libmoonmic: Adding target to build host applications (Windows/Linux)")
+    
+    add_custom_target(moonmic_hosts ALL
+        COMMAND chmod +x ${CMAKE_CURRENT_SOURCE_DIR}/host/scripts/build_hosts.sh
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/host/scripts/build_hosts.sh
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMENT "Building MoonMic host applications..."
+        VERBATIM
+    )
+    
+    # Ensure it runs after client lib is built (optional, but good for ordering)
+    add_dependencies(moonmic_hosts libmoonmic)
+endif()
+
+# ============================================================================
 # HOST APPLICATION
 # ============================================================================
 

@@ -8,13 +8,14 @@
 #include "moonmic.h"
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>  // For size_t
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 // Forward declarations
-typedef struct opus_encoder_t opus_encoder_t;
+typedef struct moonmic_opus_encoder_t moonmic_opus_encoder_t;
 typedef struct udp_sender_t udp_sender_t;
 typedef struct audio_capture_t audio_capture_t;
 
@@ -27,7 +28,7 @@ struct moonmic_client_t {
     
     // Components
     audio_capture_t* capture;
-    opus_encoder_t* encoder;
+    moonmic_opus_encoder_t* encoder;
     udp_sender_t* sender;
     
     // State
@@ -76,7 +77,7 @@ struct audio_capture_t {
 /**
  * @brief Opus encoder wrapper
  */
-struct opus_encoder_t {
+struct moonmic_opus_encoder_t {
     void* encoder;  // OpusEncoder*
     uint32_t sample_rate;
     uint8_t channels;
@@ -118,10 +119,10 @@ audio_capture_t* audio_capture_create_macos(void);
 audio_capture_t* audio_capture_create_android(void);
 #endif
 
-// Codec functions
-opus_encoder_t* opus_encoder_create(uint32_t sample_rate, uint8_t channels, uint32_t bitrate);
-void opus_encoder_destroy(opus_encoder_t* encoder);
-int opus_encoder_encode(opus_encoder_t* encoder, const float* pcm, int frame_size, 
+// Codec functions (renamed to avoid conflicts with libopus)
+moonmic_opus_encoder_t* moonmic_opus_encoder_create(uint32_t sample_rate, uint8_t channels, uint32_t bitrate);
+void moonmic_opus_encoder_destroy(moonmic_opus_encoder_t* encoder);
+int moonmic_opus_encoder_encode(moonmic_opus_encoder_t* encoder, const float* pcm, int frame_size, 
                        uint8_t* output, int max_output_bytes);
 
 // Network functions

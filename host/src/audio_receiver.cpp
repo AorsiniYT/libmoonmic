@@ -94,7 +94,7 @@ bool AudioReceiver::isClientAllowed(const std::string& ip) {
     
     // TODO: Map IP to client UUID (would need client to send UUID in packet)
     // For now, just allow if Sunshine integration is working
-    return sunshine_ && sunshine_->detectSunshine();
+    return sunshine_ && sunshine_->isSunshineDetected();
 }
 
 void AudioReceiver::onPacketReceived(const uint8_t* data, size_t size, const std::string& sender_ip) {

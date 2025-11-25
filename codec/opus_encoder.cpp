@@ -7,8 +7,8 @@
 #include <opus/opus.h>
 #include <stdlib.h>
 
-opus_encoder_t* opus_encoder_create(uint32_t sample_rate, uint8_t channels, uint32_t bitrate) {
-    opus_encoder_t* enc = (opus_encoder_t*)calloc(1, sizeof(opus_encoder_t));
+moonmic_opus_encoder_t* moonmic_opus_encoder_create(uint32_t sample_rate, uint8_t channels, uint32_t bitrate) {
+    moonmic_opus_encoder_t* enc = (moonmic_opus_encoder_t*)calloc(1, sizeof(moonmic_opus_encoder_t));
     if (!enc) {
         return NULL;
     }
@@ -40,7 +40,7 @@ opus_encoder_t* opus_encoder_create(uint32_t sample_rate, uint8_t channels, uint
     return enc;
 }
 
-void opus_encoder_destroy(opus_encoder_t* encoder) {
+void moonmic_opus_encoder_destroy(moonmic_opus_encoder_t* encoder) {
     if (!encoder) {
         return;
     }
@@ -52,7 +52,7 @@ void opus_encoder_destroy(opus_encoder_t* encoder) {
     free(encoder);
 }
 
-int opus_encoder_encode(opus_encoder_t* encoder, const float* pcm, int frame_size, 
+int moonmic_opus_encoder_encode(moonmic_opus_encoder_t* encoder, const float* pcm, int frame_size, 
                        uint8_t* output, int max_output_bytes) {
     if (!encoder || !encoder->encoder || !pcm || !output) {
         return -1;

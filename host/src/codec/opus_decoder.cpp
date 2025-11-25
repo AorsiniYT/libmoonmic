@@ -4,7 +4,7 @@
  */
 
 #include "opus_decoder.h"
-#include <opus/opus.h>
+#include <opus.h>
 #include <iostream>
 
 namespace moonmic {

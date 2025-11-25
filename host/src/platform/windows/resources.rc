@@ -1,0 +1,61 @@
+// VB-CABLE Driver Resources
+// All driver files embedded into moonmic-host.exe
+
+#include <windows.h>
+
+// Application Icon
+IDI_ICON1 ICON "ico/icon.ico"
+
+// Window Icon (PNG for GLFW)
+IDR_WINDOW_ICON_PNG RCDATA "ico/icon.png"
+
+// Installers
+IDR_VBCABLE_SETUP_X64       RCDATA "../../driver/VBCABLE_Setup_x64.exe"
+IDR_VBCABLE_SETUP           RCDATA "../../driver/VBCABLE_Setup.exe"
+IDR_VBCABLE_CONTROLPANEL    RCDATA "../../driver/VBCABLE_ControlPanel.exe"
+
+// Windows 10/11 x64 Driver Files
+IDR_DRIVER_WIN10_INF        RCDATA "../../driver/vbMmeCable64_win10.inf"
+IDR_DRIVER_WIN10_SYS        RCDATA "../../driver/vbaudio_cable64_win10.sys"
+IDR_DRIVER_WIN10_CAT        RCDATA "../../driver/vbaudio_cable64_win10.cat"
+IDR_DRIVER_WIN10_ARM_SYS    RCDATA "../../driver/vbaudio_cable64arm_win10.sys"
+
+// Windows 7 x64 Driver Files
+IDR_DRIVER_WIN7_64_INF      RCDATA "../../driver/vbMmeCable64_win7.inf"
+IDR_DRIVER_WIN7_64_SYS      RCDATA "../../driver/vbaudio_cable64_win7.sys"
+IDR_DRIVER_WIN7_64_CAT      RCDATA "../../driver/vbaudio_cable64_win7.cat"
+
+// Windows Vista x64 Driver Files
+IDR_DRIVER_VISTA_64_INF     RCDATA "../../driver/vbMmeCable64_vista.inf"
+IDR_DRIVER_VISTA_64_SYS     RCDATA "../../driver/vbaudio_cable64_vista.sys"
+IDR_DRIVER_VISTA_64_CAT     RCDATA "../../driver/vbaudio_cable64_vista.cat"
+
+// Windows 2003 x64 Driver Files
+IDR_DRIVER_2003_64_INF      RCDATA "../../driver/vbMmeCable64_2003.inf"
+IDR_DRIVER_2003_64_SYS      RCDATA "../../driver/vbaudio_cable64_2003.sys"
+IDR_DRIVER_2003_64_CAT      RCDATA "../../driver/vbaudio_cable64_2003.cat"
+
+// Windows 7 x86 Driver Files
+IDR_DRIVER_WIN7_32_INF      RCDATA "../../driver/vbMmeCable_win7.inf"
+IDR_DRIVER_WIN7_32_SYS      RCDATA "../../driver/vbaudio_cable_win7.sys"
+IDR_DRIVER_WIN7_32_CAT      RCDATA "../../driver/vbaudio_cable_win7.cat"
+
+// Windows Vista x86 Driver Files
+IDR_DRIVER_VISTA_32_INF     RCDATA "../../driver/vbMmeCable_vista.inf"
+IDR_DRIVER_VISTA_32_SYS     RCDATA "../../driver/vbaudio_cable_vista.sys"
+IDR_DRIVER_VISTA_32_CAT     RCDATA "../../driver/vbaudio_cable_vista.cat"
+
+// Windows XP Driver Files
+IDR_DRIVER_XP_INF           RCDATA "../../driver/vbMmeCable_xp.inf"
+IDR_DRIVER_XP_SYS           RCDATA "../../driver/vbaudio_cable_xp.sys"
+IDR_DRIVER_XP_CAT           RCDATA "../../driver/vbaudio_cable_xp.cat"
+
+// Windows 2003 x86 Driver Files
+IDR_DRIVER_2003_32_INF      RCDATA "../../driver/vbMmeCable_2003.inf"
+IDR_DRIVER_2003_32_SYS      RCDATA "../../driver/vbaudio_cable_2003.sys"
+IDR_DRIVER_2003_32_CAT      RCDATA "../../driver/vbaudio_cable_2003.cat"
+
+// Icons and documentation
+IDR_ICON_PIN_IN             RCDATA "../../driver/pin_in.ico"
+IDR_ICON_PIN_OUT            RCDATA "../../driver/pin_out.ico"
+IDR_README_TXT              RCDATA "../../driver/readme.txt"

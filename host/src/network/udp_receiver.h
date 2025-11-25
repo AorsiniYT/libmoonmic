@@ -32,10 +32,17 @@ public:
     
     void setPacketCallback(PacketCallback callback) { packet_callback_ = callback; }
     
-private:
     void receiveLoop();
     
-    int socket_fd_;
+private:
+    
+#ifdef _WIN32
+    using socket_t = unsigned long long; // SOCKET type on Windows x64
+#else
+    using socket_t = int; // POSIX socket type
+#endif
+    
+    socket_t socket_fd_;
     bool running_;
     void* thread_handle_;
     PacketCallback packet_callback_;

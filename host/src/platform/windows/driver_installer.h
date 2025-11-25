@@ -54,6 +54,9 @@ private:
     
     bool runSetupExecutable();
     bool enumerateAudioDevices();
+    bool extractEmbeddedInstaller(const std::string& temp_dir);
+    bool extractResourceToFile(const char* resource_name, const std::string& output_path);
+    void cleanupTempDir(const std::string& temp_dir);
 };
 
 } // namespace moonmic

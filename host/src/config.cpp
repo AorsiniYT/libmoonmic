@@ -116,7 +116,8 @@ std::string Config::getDefaultConfigPath() {
 #ifdef _WIN32
     char appdata[MAX_PATH];
     if (SHGetFolderPathA(NULL, CSIDL_APPDATA, NULL, 0, appdata) == S_OK) {
-        std::string config_dir = std::string(appdata) + "\\MoonMic";
+        std::string config_dir = std::string(appdata) + "\\AorsiniYT\\MoonMic";
+        CreateDirectoryA((std::string(appdata) + "\\AorsiniYT").c_str(), NULL);
         CreateDirectoryA(config_dir.c_str(), NULL);
         return config_dir + "\\moonmic-host.json";
     }
@@ -129,7 +130,9 @@ std::string Config::getDefaultConfigPath() {
     }
     
     if (home) {
-        std::string config_dir = std::string(home) + "/.config/moonmic";
+        std::string aorsini_dir = std::string(home) + "/.config/AorsiniYT";
+        std::string config_dir = aorsini_dir + "/MoonMic";
+        mkdir(aorsini_dir.c_str(), 0755);
         mkdir(config_dir.c_str(), 0755);
         return config_dir + "/moonmic-host.json";
     }

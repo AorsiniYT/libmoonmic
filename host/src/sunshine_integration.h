@@ -52,6 +52,18 @@ public:
     bool isClientPaired(const std::string& uuid);
     
     /**
+     * @brief Check if Sunshine was detected
+     * @return true if Sunshine is detected
+     */
+    bool isSunshineDetected() const { return sunshine_detected_; }
+    
+    /**
+     * @brief Get cached paired clients
+     * @return Reference to paired clients list
+     */
+    const std::vector<PairedClient>& getPairedClients() const { return paired_clients_; }
+    
+    /**
      * @brief Reload paired clients from Sunshine
      */
     void reload();
