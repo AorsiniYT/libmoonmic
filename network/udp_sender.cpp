@@ -4,6 +4,7 @@
  */
 
 #include "moonmic_internal.h"
+#include "moonmic_debug.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -102,6 +103,18 @@ bool udp_sender_send(udp_sender_t* sender, const void* data, size_t size) {
     inet_pton(AF_INET, sender->host_ip, &dest_addr.sin_addr);
 #endif
     
+    // DEBUG: Log first packet data
+    static bool first_packet = true;
+    if (first_packet) {
+        first_packet = false;
+        const uint8_t* byte_data = (const uint8_t*)data;
+        MOONMIC_LOG("[udp_sender] Sending packet of size %zu", size);
+        MOONMIC_LOG("[udp_sender] First 20 bytes: ");
+        for (size_t i = 0; i < (size < 20 ? size : 20); i++) {
+            MOONMIC_LOG("[%02zu] = 0x%02X ", i, byte_data[i]);
+        }
+    }
+
     int sent = sendto(
         sender->socket_fd,
         (const char*)data,

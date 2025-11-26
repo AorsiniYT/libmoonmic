@@ -49,6 +49,10 @@ private:
     std::atomic<bool> running_;
     Stats stats_;
     
+    // Auto-detected stream sample rate
+    uint32_t detected_stream_rate_ = 0;
+    bool rate_logged_ = false;
+    
     // Audio buffer
     static constexpr size_t MAX_FRAMES = 5760;  // 120ms at 48kHz
     float audio_buffer_[MAX_FRAMES * 2];  // Stereo

@@ -21,7 +21,9 @@ struct Config {
     // Audio settings
     struct {
         std::string virtual_device_name = "MoonMic Virtual Microphone";
-        int sample_rate = 48000;
+        int stream_sample_rate = 16000;  // Sample rate of incoming stream (e.g., 16kHz from Vita)
+        int resampling_rate = 48000;  // Output sample rate (resample from stream to this)
+        int sample_rate = 48000;  // Deprecated: use resampling_rate instead
         int channels = 1;
         int buffer_size_ms = 20;
     } audio;

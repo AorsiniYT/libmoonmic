@@ -149,27 +149,20 @@ void UDPReceiver::receiveLoop() {
             break;
         }
         
-        if (received < sizeof(PacketHeader)) {
-            continue;  // Packet too small
-        }
-        
-        // Verify magic number
-        PacketHeader* header = (PacketHeader*)buffer;
-        if (header->magic != MOONMIC_MAGIC) {
-            continue;  // Invalid packet
+        // Minimal size check - just verify it's not empty
+        // Let audio_receiver.cpp handle full packet validation
+        if (received < 20) {  // Minimum header size
+            continue;
         }
         
         // Get sender IP
         char sender_ip[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &sender_addr.sin_addr, sender_ip, INET_ADDRSTRLEN);
         
-        // Extract Opus data (after header)
-        const uint8_t* opus_data = buffer + sizeof(PacketHeader);
-        size_t opus_size = received - sizeof(PacketHeader);
-        
-        // Call callback
+        // Pass COMPLETE packet (including header) to callback
+        // audio_receiver.cpp will parse the header manually
         if (packet_callback_) {
-            packet_callback_(opus_data, opus_size, std::string(sender_ip));
+            packet_callback_(buffer, received, std::string(sender_ip));
         }
     }
 }

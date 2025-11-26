@@ -4,12 +4,16 @@
  */
 
 #include "moonmic_internal.h"
+#include "moonmic_debug.h"
 #include <opus/opus.h>
 #include <stdlib.h>
 
 moonmic_opus_encoder_t* moonmic_opus_encoder_create(uint32_t sample_rate, uint8_t channels, uint32_t bitrate) {
+    MOONMIC_LOG("[opus_encoder] Creating encoder: %uHz, %dch, %ubps", sample_rate, channels, bitrate);
+    
     moonmic_opus_encoder_t* enc = (moonmic_opus_encoder_t*)calloc(1, sizeof(moonmic_opus_encoder_t));
     if (!enc) {
+        MOONMIC_LOG("[opus_encoder] ERROR: Failed to allocate encoder");
         return NULL;
     }
     
@@ -22,6 +26,7 @@ moonmic_opus_encoder_t* moonmic_opus_encoder_create(uint32_t sample_rate, uint8_
     );
     
     if (error != OPUS_OK || !enc->encoder) {
+        MOONMIC_LOG("[opus_encoder] ERROR: opus_encoder_create failed: %d", error);
         free(enc);
         return NULL;
     }
@@ -37,6 +42,7 @@ moonmic_opus_encoder_t* moonmic_opus_encoder_create(uint32_t sample_rate, uint8_
     enc->channels = channels;
     enc->bitrate = bitrate;
     
+    MOONMIC_LOG("[opus_encoder] Encoder created successfully");
     return enc;
 }
 
@@ -55,14 +61,22 @@ void moonmic_opus_encoder_destroy(moonmic_opus_encoder_t* encoder) {
 int moonmic_opus_encoder_encode(moonmic_opus_encoder_t* encoder, const float* pcm, int frame_size, 
                        uint8_t* output, int max_output_bytes) {
     if (!encoder || !encoder->encoder || !pcm || !output) {
+        MOONMIC_LOG("[opus_encoder] ERROR: Invalid parameters");
         return -1;
     }
     
-    return opus_encode_float(
+    int result = opus_encode_float(
         (OpusEncoder*)encoder->encoder,
         pcm,
         frame_size,
         output,
         max_output_bytes
     );
+    
+    if (result < 0) {
+        MOONMIC_LOG("[opus_encoder] ERROR: opus_encode_float failed: %d (frame_size=%d, max_out=%d)", 
+            result, frame_size, max_output_bytes);
+    }
+    
+    return result;
 }

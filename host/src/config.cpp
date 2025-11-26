@@ -41,7 +41,9 @@ bool Config::load(const std::string& path) {
         if (j.contains("audio")) {
             auto& a = j["audio"];
             if (a.contains("virtual_device_name")) audio.virtual_device_name = a["virtual_device_name"];
-            if (a.contains("sample_rate")) audio.sample_rate = a["sample_rate"];
+            if (a.contains("stream_sample_rate")) audio.stream_sample_rate = a["stream_sample_rate"];
+            if (a.contains("resampling_rate")) audio.resampling_rate = a["resampling_rate"];
+            if (a.contains("sample_rate")) audio.sample_rate = a["sample_rate"];  // Backward compat
             if (a.contains("channels")) audio.channels = a["channels"];
             if (a.contains("buffer_size_ms")) audio.buffer_size_ms = a["buffer_size_ms"];
         }
@@ -84,7 +86,9 @@ bool Config::save(const std::string& path) {
         j["server"]["bind_address"] = server.bind_address;
         
         j["audio"]["virtual_device_name"] = audio.virtual_device_name;
-        j["audio"]["sample_rate"] = audio.sample_rate;
+        j["audio"]["stream_sample_rate"] = audio.stream_sample_rate;
+        j["audio"]["resampling_rate"] = audio.resampling_rate;
+        j["audio"]["sample_rate"] = audio.sample_rate;  // Deprecated, for backward compat
         j["audio"]["channels"] = audio.channels;
         j["audio"]["buffer_size_ms"] = audio.buffer_size_ms;
         

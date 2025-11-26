@@ -97,14 +97,18 @@ struct udp_sender_t {
 /**
  * @brief Packet header for UDP transmission
  */
-typedef struct {
+typedef struct __attribute__((packed)) {
     uint32_t magic;      // 0x4D4D4943 ("MMIC")
     uint32_t sequence;   // Packet sequence number
     uint64_t timestamp;  // Microseconds since start
+    uint32_t sample_rate; // Sample rate of encoded audio (e.g., 16000, 48000)
 } moonmic_packet_header_t;
 
 #define MOONMIC_MAGIC 0x4D4D4943
 #define MOONMIC_VERSION "1.0.0"
+// Header size: magic(4) + sequence(4) + timestamp(8) + sample_rate(4) = 20 bytes
+// Use this constant instead of sizeof() due to compiler alignment issues on ARM
+#define MOONMIC_HEADER_SIZE 20
 
 // Platform-specific factory functions
 #ifdef __vita__
@@ -124,6 +128,15 @@ moonmic_opus_encoder_t* moonmic_opus_encoder_create(uint32_t sample_rate, uint8_
 void moonmic_opus_encoder_destroy(moonmic_opus_encoder_t* encoder);
 int moonmic_opus_encoder_encode(moonmic_opus_encoder_t* encoder, const float* pcm, int frame_size, 
                        uint8_t* output, int max_output_bytes);
+
+// Speex resampler functions
+typedef struct moonmic_speex_resampler_t moonmic_speex_resampler_t;
+moonmic_speex_resampler_t* moonmic_speex_resampler_create(uint32_t in_rate, uint32_t out_rate, uint8_t channels);
+void moonmic_speex_resampler_destroy(moonmic_speex_resampler_t* resampler);
+int moonmic_speex_resampler_process(moonmic_speex_resampler_t* resampler, 
+                                     const int16_t* input, uint32_t in_frames,
+                                     int16_t* output, uint32_t* out_frames);
+
 
 // Network functions
 udp_sender_t* udp_sender_create(const char* host_ip, uint16_t port);

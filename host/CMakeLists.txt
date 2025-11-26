@@ -16,6 +16,13 @@ endif()
 # Options
 option(USE_IMGUI "Build with Dear ImGui GUI" ON)
 
+# Generate version header from template
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/version.h.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/version.h"
+    @ONLY
+)
+
 # Source files
 set(SOURCES
     src/main.cpp
@@ -25,6 +32,7 @@ set(SOURCES
     src/codec/opus_decoder.cpp
     src/network/udp_receiver.cpp
     src/single_instance.cpp
+    src/version_checker.cpp
 )
 
 # Platform-specific sources
@@ -73,7 +81,9 @@ target_include_directories(moonmic-host PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/codec
     ${CMAKE_CURRENT_SOURCE_DIR}/src/network
     ${CMAKE_CURRENT_SOURCE_DIR}/src/platform
+    ${CMAKE_CURRENT_BINARY_DIR}  # For generated version.h
 )
+
 
 if(USE_IMGUI AND EXISTS ${IMGUI_DIR}/imgui.cpp)
     target_include_directories(moonmic-host PRIVATE

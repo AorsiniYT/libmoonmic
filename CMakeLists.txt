@@ -120,71 +120,77 @@ if(BUILD_CLIENT)
 endif()
 
 # ============================================================================
-# HOST APPLICATIONS (Cross-compile helper)
+# HOST APPLICATIONS (Cross-compile helper) - DISABLED
 # ============================================================================
 
-if(BUILD_HOST AND (PLATFORM_PSV OR CMAKE_SYSTEM_NAME STREQUAL "Vita"))
-    message(STATUS "libmoonmic: Adding target to build host applications (Windows/Linux)")
-    
-    add_custom_target(moonmic_hosts ALL
-        COMMAND chmod +x ${CMAKE_CURRENT_SOURCE_DIR}/host/scripts/build_hosts.sh
-        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/host/scripts/build_hosts.sh
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        COMMENT "Building MoonMic host applications..."
-        VERBATIM
-    )
-    
-    # Ensure it runs after client lib is built (optional, but good for ordering)
-    add_dependencies(moonmic_hosts libmoonmic)
-endif()
+# Note: Host builds are now triggered by makefast/makepsv scripts at the end
+# This prevents Windows MinGW linker errors from blocking PS Vita builds
+
+# if(BUILD_HOST AND (PLATFORM_PSV OR CMAKE_SYSTEM_NAME STREQUAL "Vita"))
+#     message(STATUS "libmoonmic: Adding target to build host applications (Windows/Linux)")
+#     
+#     add_custom_target(moonmic_hosts ALL
+#         COMMAND chmod +x ${CMAKE_CURRENT_SOURCE_DIR}/host/scripts/build_hosts.sh
+#         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/host/scripts/build_hosts.sh
+#         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+#         COMMENT "Building MoonMic host applications..."
+#         VERBATIM
+#     )
+#     
+#     # Ensure it runs after client lib is built (optional, but good for ordering)
+#     add_dependencies(moonmic_hosts libmoonmic)
+# endif()
 
 # ============================================================================
-# HOST APPLICATION
+# HOST APPLICATIONS (Disabled - handled by makefast/makepsv scripts)
 # ============================================================================
 
-if(BUILD_HOST)
-    message(STATUS "=== Building moonmic-host application ===")
-    
-    # Determine which hosts to build
-    set(BUILD_HOSTS "")
-    
-    if(BUILD_HOST_WINDOWS)
-        list(APPEND BUILD_HOSTS "windows")
-    endif()
-    
-    if(BUILD_HOST_LINUX)
-        list(APPEND BUILD_HOSTS "linux")
-    endif()
-    
-    # If no specific host selected, build for current platform
-    if(NOT BUILD_HOSTS)
-        if(WIN32)
-            list(APPEND BUILD_HOSTS "windows")
-        elseif(UNIX AND NOT APPLE)
-            list(APPEND BUILD_HOSTS "linux")
-        endif()
-    endif()
-    
-    # Build each host
-    foreach(HOST_PLATFORM ${BUILD_HOSTS})
-        message(STATUS "Configuring host for: ${HOST_PLATFORM}")
-        
-        # Set output directory
-        set(HOST_OUTPUT_DIR "${CMAKE_BINARY_DIR}/host-${HOST_PLATFORM}")
-        
-        # Add subdirectory with custom binary dir
-        add_subdirectory(host ${HOST_OUTPUT_DIR})
-        
-        # Set platform-specific variables for host build
-        if(HOST_PLATFORM STREQUAL "windows")
-            set(HOST_TARGET_WINDOWS ON CACHE BOOL "" FORCE)
-            set(HOST_TARGET_LINUX OFF CACHE BOOL "" FORCE)
-        elseif(HOST_PLATFORM STREQUAL "linux")
-            set(HOST_TARGET_WINDOWS OFF CACHE BOOL "" FORCE)
-            set(HOST_TARGET_LINUX ON CACHE BOOL "" FORCE)
-        endif()
-    endforeach()
-endif()
+# Note: Host builds are now triggered by makefast/makepsv scripts
+# This prevents compilation failures in hosts from blocking PS Vita builds
+
+# if(BUILD_HOST)
+#     message(STATUS "=== Building moonmic-host application ===")
+#     
+#     # Determine which hosts to build
+#     set(BUILD_HOSTS "")
+#     
+#     if(BUILD_HOST_WINDOWS)
+#         list(APPEND BUILD_HOSTS "windows")
+#     endif()
+#     
+#     if(BUILD_HOST_LINUX)
+#         list(APPEND BUILD_HOSTS "linux")
+#     endif()
+#     
+#     # If no specific host selected, build for current platform
+#     if(NOT BUILD_HOSTS)
+#         if(WIN32)
+#             list(APPEND BUILD_HOSTS "windows")
+#         elseif(UNIX AND NOT APPLE)
+#             list(APPEND BUILD_HOSTS "linux")
+#         endif()
+#     endif()
+#     
+#     # Build each host
+#     foreach(HOST_PLATFORM ${BUILD_HOSTS})
+#         message(STATUS "Configuring host for: ${HOST_PLATFORM}")
+#         
+#         # Set output directory
+#         set(HOST_OUTPUT_DIR "${CMAKE_BINARY_DIR}/host-${HOST_PLATFORM}")
+#         
+#         # Add subdirectory with custom binary dir
+#         add_subdirectory(host ${HOST_OUTPUT_DIR})
+#         
+#         # Set platform-specific variables for host build
+#         if(HOST_PLATFORM STREQUAL "windows")
+#             set(HOST_TARGET_WINDOWS ON CACHE BOOL "" FORCE)
+#             set(HOST_TARGET_LINUX OFF CACHE BOOL "" FORCE)
+#         elseif(HOST_PLATFORM STREQUAL "linux")
+#             set(HOST_TARGET_WINDOWS OFF CACHE BOOL "" FORCE)
+#             set(HOST_TARGET_LINUX ON CACHE BOOL "" FORCE)
+#         endif()
+#     endforeach()
+# endif()
 
 # ============================================================================
 # SUMMARY

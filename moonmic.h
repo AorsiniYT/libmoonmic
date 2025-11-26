@@ -15,6 +15,26 @@
 extern "C" {
 #endif
 
+// ============================================================================
+// MICROPHONE CONFIGURATION CONSTANTS (Vita Hardware)
+// ============================================================================
+// These are the optimal values for PS Vita microphone hardware.
+// Use these constants everywhere to avoid hardcoding values multiple times.
+
+/** Default microphone sample rate (Hz) - Vita hardware native rate */
+#define MOONMIC_DEFAULT_SAMPLE_RATE 16000
+
+/** Default microphone channels - Vita only supports mono */
+#define MOONMIC_DEFAULT_CHANNELS 1
+
+/** Default Opus bitrate (bps) - optimal for 16kHz mono VOIP */
+#define MOONMIC_DEFAULT_BITRATE 24000
+
+/** Default UDP port for microphone transmission */
+#define MOONMIC_DEFAULT_PORT 48100
+
+// ============================================================================
+
 /**
  * @brief Opaque handle to a MoonMic client instance
  */
