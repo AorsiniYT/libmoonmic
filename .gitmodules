@@ -13,3 +13,7 @@
 [submodule "host/third_party/speexdsp"]
 	path = host/third_party/speexdsp
 	url = https://github.com/xiph/speexdsp.git
+[submodule "host/third_party/ffmpeg"]
+	path = host/third_party/ffmpeg
+	url = https://github.com/FFmpeg/FFmpeg.git
+	branch = release/7.1
