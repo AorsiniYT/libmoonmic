@@ -13,13 +13,15 @@ namespace moonmic {
 
 class VirtualDeviceLinux : public VirtualDevice {
 public:
-    VirtualDeviceLinux() : pulse_(nullptr) {}
+    VirtualDeviceLinux() : pulse_(nullptr), sample_rate_(0) {}
     
     ~VirtualDeviceLinux() override {
         close();
     }
     
     bool init(const std::string& device_name, int sample_rate, int channels) override {
+        sample_rate_ = sample_rate;  // Store for getSampleRate()
+        
         pa_sample_spec ss;
         ss.format = PA_SAMPLE_FLOAT32LE;
         ss.rate = sample_rate;
@@ -77,8 +79,13 @@ public:
         }
     }
     
+    int getSampleRate() const override {
+        return sample_rate_;
+    }
+    
 private:
     pa_simple* pulse_;
+    int sample_rate_;
 };
 
 std::unique_ptr<VirtualDevice> VirtualDevice::create() {

@@ -23,20 +23,26 @@ if(BUILD_CLIENT)
     )
     
     # Add platform-specific sources
-    if(PLATFORM_PSV OR CMAKE_SYSTEM_NAME STREQUAL "Vita")
+    if(VITA)
         message(STATUS "libmoonmic: Building for PS Vita")
         target_sources(libmoonmic PRIVATE platform/psvita/audio_capture_vita.cpp)
-        target_link_libraries(libmoonmic PUBLIC SceAudio_stub SceAudioIn_stub)
-        target_compile_definitions(libmoonmic PRIVATE __vita__)
+        target_sources(libmoonmic PRIVATE platform/psvita/heartbeat_monitor.cpp)
+        target_link_libraries(libmoonmic PUBLIC 
+            SceNet_stub 
+            SceAudio_stub
+        )
         
     elseif(WIN32)
         message(STATUS "libmoonmic: Building for Windows")
         target_sources(libmoonmic PRIVATE platform/windows/audio_capture_windows.cpp)
-        target_link_libraries(libmoonmic PUBLIC winmm ole32)
+        target_sources(libmoonmic PRIVATE platform/windows/heartbeat_monitor.cpp)
+        target_link_libraries(libmoonmic PUBLIC ws2_32)
         
     elseif(UNIX AND NOT APPLE)
         message(STATUS "libmoonmic: Building for Linux")
         target_sources(libmoonmic PRIVATE platform/linux/audio_capture_linux.cpp)
+        target_sources(libmoonmic PRIVATE platform/linux/heartbeat_monitor.cpp)
+        target_link_libraries(libmoonmic PUBLIC pthread)
         
         # Find PulseAudio
         find_package(PkgConfig REQUIRED)
@@ -47,10 +53,12 @@ if(BUILD_CLIENT)
     elseif(APPLE)
         message(STATUS "libmoonmic: macOS support not yet implemented")
         # TODO: Implement platform/macos/audio_capture_macos.cpp
+        # TODO: Implement platform/macos/heartbeat_monitor.cpp
         
     elseif(ANDROID)
         message(STATUS "libmoonmic: Android support not yet implemented")
         # TODO: Implement platform/android/audio_capture_android.cpp
+        # TODO: Implement platform/android/heartbeat_monitor.cpp
         
     else()
         message(FATAL_ERROR "libmoonmic: Unsupported platform")

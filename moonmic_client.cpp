@@ -6,8 +6,21 @@
 #include "moonmic.h"
 #include "moonmic_internal.h"
 #include "moonmic_debug.h"
-#include <stdlib.h>
-#include <string.h>
+#include "heartbeat_monitor.h"
+#include <cstdlib>
+#include <cstring>
+#include <cstdio>
+
+// Include platform-specific configuration
+#ifdef __vita__
+#include <psp2/kernel/processmgr.h>
+#include <psp2/kernel/threadmgr.h>
+#include "platform/psvita/platform_config.h"
+#elif defined(_WIN32)
+#include "platform/windows/platform_config.h"
+#else
+#include "platform/linux/platform_config.h"
+#endif
 
 #ifdef _WIN32
 #include <windows.h>
@@ -20,6 +33,34 @@
 // Worker thread function
 static void* moonmic_worker_thread(void* arg) {
     moonmic_client_t* client = (moonmic_client_t*)arg;
+    
+    // Send handshake packet first (and re-send every 3 seconds if not validated)
+    moonmic_handshake_t handshake = {0};
+    handshake.magic = 0x4D4F4F4E;  // "MOON"
+    handshake.version = 1;
+    handshake.pair_status = client->config.pair_status;
+    
+    // Copy uniqueid and devicename from config if provided
+    if (client->config.uniqueid && client->config.uniqueid[0]) {
+        handshake.uniqueid_len = (uint8_t)strlen(client->config.uniqueid);
+        if (handshake.uniqueid_len > 16) handshake.uniqueid_len = 16;
+        memcpy(handshake.uniqueid, client->config.uniqueid, handshake.uniqueid_len);
+    }
+    
+    if (client->config.devicename && client->config.devicename[0]) {
+        handshake.devicename_len = (uint8_t)strlen(client->config.devicename);
+        if (handshake.devicename_len > 64) handshake.devicename_len = 64;
+        memcpy(handshake.devicename, client->config.devicename, handshake.devicename_len);
+    }
+    
+    // Send initial handshake
+    if (udp_sender_send(client->sender, &handshake, sizeof(handshake))) {
+        MOONMIC_LOG("[moonmic_worker] Handshake sent: device='%s', uniqueid_len=%d", 
+                   client->config.devicename ? client->config.devicename : "unknown",
+                   handshake.uniqueid_len);
+    } else {
+        MOONMIC_LOG("[moonmic_worker] WARNING: Failed to send handshake");
+    }
     
     // Vita: 256 samples @ 16kHz → 320 samples for Opus (padded)
     // Other platforms: 480 samples @ 48kHz
@@ -67,89 +108,172 @@ static void* moonmic_worker_thread(void* arg) {
             continue;
         }
         
-        // Vita captures 256 samples @ 16kHz, pad to 320 for Opus
-        int opus_frame_size = frames_read;
-#ifdef __vita__
-        if (frames_read == 256) {
-            // Pad with last sample to reach 320 (valid Opus frame size @ 16kHz)
-            for (int i = 256; i < 320; i++) {
-                pcm_buffer[i] = pcm_buffer[255];
+        // RAW mode: send immediately without accumulation
+        if (client->config.raw_mode) {
+            // Convert float to int16 for transmission
+            int16_t* pcm_int16 = (int16_t*)(opus_buffer + MOONMIC_HEADER_SIZE);
+            for (int i = 0; i < frames_read * client->config.channels; i++) {
+                float sample = pcm_buffer[i];
+                if (sample > 1.0f) sample = 1.0f;
+                if (sample < -1.0f) sample = -1.0f;
+                pcm_int16[i] = (int16_t)(sample * 32767.0f);
             }
-            opus_frame_size = 320;
-        }
-#endif
-        
-        // Encode with Opus
-        int encoded_bytes = moonmic_opus_encoder_encode(
-            client->encoder,
-            pcm_buffer,
-            opus_frame_size,
-            opus_buffer + MOONMIC_HEADER_SIZE,
-            4000 - MOONMIC_HEADER_SIZE
-        );
-        
-        if (encoded_bytes < 0) {
-            if (client->error_callback) {
-                client->error_callback("Opus encoding failed", client->error_userdata);
-            }
-            continue;
-        }
-        
-        // Prepare packet header - WRITE MANUALLY to ensure correct byte order
-        // We write manually because ARM compiler struct packing is unreliable
-        uint8_t* header_ptr = opus_buffer;
-        
-        // Magic (0x4D4D4943 = "MMIC") - 4 bytes, little-endian
-        uint32_t magic = MOONMIC_MAGIC;
-        header_ptr[0] = (magic >> 0) & 0xFF;
-        header_ptr[1] = (magic >> 8) & 0xFF;
-        header_ptr[2] = (magic >> 16) & 0xFF;
-        header_ptr[3] = (magic >> 24) & 0xFF;
-        
-        // Sequence - 4 bytes, little-endian
-        uint32_t seq = client->sender->sequence++;
-        header_ptr[4] = (seq >> 0) & 0xFF;
-        header_ptr[5] = (seq >> 8) & 0xFF;
-        header_ptr[6] = (seq >> 16) & 0xFF;
-        header_ptr[7] = (seq >> 24) & 0xFF;
-        
-        // Timestamp - 8 bytes, little-endian
-        uint64_t ts = moonmic_get_timestamp_us();
-        header_ptr[8] = (ts >> 0) & 0xFF;
-        header_ptr[9] = (ts >> 8) & 0xFF;
-        header_ptr[10] = (ts >> 16) & 0xFF;
-        header_ptr[11] = (ts >> 24) & 0xFF;
-        header_ptr[12] = (ts >> 32) & 0xFF;
-        header_ptr[13] = (ts >> 40) & 0xFF;
-        header_ptr[14] = (ts >> 48) & 0xFF;
-        header_ptr[15] = (ts >> 56) & 0xFF;
-        
-        // Sample rate - 4 bytes, little-endian
-        uint32_t sr = client->encoder->sample_rate;
-        header_ptr[16] = (sr >> 0) & 0xFF;
-        header_ptr[17] = (sr >> 8) & 0xFF;
-        header_ptr[18] = (sr >> 16) & 0xFF;
-        header_ptr[19] = (sr >> 24) & 0xFF;
-        
-        // DEBUG: Log first packet
-        if (seq == 0) {  // First packet (before increment)
-            MOONMIC_LOG("[moonmic_worker] FIRST PACKET (manual write):");
-            MOONMIC_LOG("  magic = 0x%08X", magic);
-            MOONMIC_LOG("  sequence = %u", seq);
-            MOONMIC_LOG("  timestamp = %llu", (unsigned long long)ts);
-            MOONMIC_LOG("  sample_rate = %u", sr);
-            MOONMIC_LOG("  Raw bytes:");
-            for (int i = 0; i < 20; i++) {
-                MOONMIC_LOG("    [%02d] = 0x%02X", i, header_ptr[i]);
-            }
+            int encoded_bytes = frames_read * client->config.channels * sizeof(int16_t);
+            uint32_t packet_sample_rate = client->config.sample_rate | MOONMIC_RAW_FLAG;
+            
+            // Prepare and send packet (same header logic as before)
+            uint8_t* header_ptr = opus_buffer;
+            uint32_t magic = MOONMIC_MAGIC;
+            header_ptr[0] = (magic >> 0) & 0xFF;
+            header_ptr[1] = (magic >> 8) & 0xFF;
+            header_ptr[2] = (magic >> 16) & 0xFF;
+            header_ptr[3] = (magic >> 24) & 0xFF;
+            
+            uint32_t seq = client->sender->sequence++;
+            header_ptr[4] = (seq >> 0) & 0xFF;
+            header_ptr[5] = (seq >> 8) & 0xFF;
+            header_ptr[6] = (seq >> 16) & 0xFF;
+            header_ptr[7] = (seq >> 24) & 0xFF;
+            
+            uint64_t ts = moonmic_get_timestamp_us();
+            header_ptr[8] = (ts >> 0) & 0xFF;
+            header_ptr[9] = (ts >> 8) & 0xFF;
+            header_ptr[10] = (ts >> 16) & 0xFF;
+            header_ptr[11] = (ts >> 24) & 0xFF;
+            header_ptr[12] = (ts >> 32) & 0xFF;
+            header_ptr[13] = (ts >> 40) & 0xFF;
+            header_ptr[14] = (ts >> 48) & 0xFF;
+            header_ptr[15] = (ts >> 56) & 0xFF;
+            
+            header_ptr[16] = (packet_sample_rate >> 0) & 0xFF;
+            header_ptr[17] = (packet_sample_rate >> 8) & 0xFF;
+            header_ptr[18] = (packet_sample_rate >> 16) & 0xFF;
+            header_ptr[19] = (packet_sample_rate >> 24) & 0xFF;
+            
+            size_t total_size = MOONMIC_HEADER_SIZE + encoded_bytes;
+            udp_sender_send(client->sender, opus_buffer, total_size);
+            continue;  // Skip Opus encoding
         }
         
-        // Send via UDP
-        size_t total_size = MOONMIC_HEADER_SIZE + encoded_bytes;
-        if (!udp_sender_send(client->sender, opus_buffer, total_size)) {
-            if (client->error_callback) {
-                client->error_callback("UDP send failed", client->error_userdata);
+        // OPUS MODE: Accumulate frames until we reach 320 samples (20ms @ 16kHz)
+        int samples_to_copy = frames_read * client->config.channels;
+        int space_available = (client->target_frame_size - client->accumulated_samples) * client->config.channels;
+        
+        
+        // Apply gain to samples (BEFORE encoding)
+        // This is critical because Vita microphone has very low volume
+        // Gain from config (default: 10.0x, adjustable 1.0-100.0 in GUI)
+        const float GAIN = client->config.gain;
+        
+        for (int i = 0; i < samples_to_copy; i++) {
+            pcm_buffer[i] *= GAIN;
+            
+            // Clamp to prevent overflow (hard clipping)
+            if (pcm_buffer[i] > 1.0f) pcm_buffer[i] = 1.0f;
+            if (pcm_buffer[i] < -1.0f) pcm_buffer[i] = -1.0f;
+        }
+        
+        // DEBUG: Log accumulation state
+        static int accum_log_count = 0;
+        if (accum_log_count < 10) {
+            MOONMIC_LOG("[ACCUM] Read %d frames (%d samples), buffer has %zu/%zu",
+                       frames_read, samples_to_copy, client->accumulated_samples, client->target_frame_size);
+            MOONMIC_LOG("[ACCUM] First 5 AMPLIFIED samples (gain=%.1fx): %.4f %.4f %.4f %.4f %.4f",
+                       GAIN, pcm_buffer[0], pcm_buffer[1], pcm_buffer[2], pcm_buffer[3], pcm_buffer[4]);
+            accum_log_count++;
+        }
+        
+        if (samples_to_copy <= space_available) {
+            // Copy all samples to accumulation buffer
+            memcpy(client->accumulation_buffer + client->accumulated_samples * client->config.channels,
+                   pcm_buffer,
+                   samples_to_copy * sizeof(float));
+            client->accumulated_samples += frames_read;
+            
+            if (accum_log_count < 10) {
+                MOONMIC_LOG("[ACCUM] Copied ALL %d frames, new total: %zu/%zu",
+                           frames_read, client->accumulated_samples, client->target_frame_size);
             }
+        } else {
+            // Copy only what fits
+            int frames_to_copy = space_available / client->config.channels;
+            memcpy(client->accumulation_buffer + client->accumulated_samples * client->config.channels,
+                   pcm_buffer,
+                   frames_to_copy * client->config.channels * sizeof(float));
+            client->accumulated_samples += frames_to_copy;
+            
+            if (accum_log_count < 10) {
+                MOONMIC_LOG("[ACCUM] Copied PARTIAL %d frames (of %d), buffer FULL at %zu",
+                           frames_to_copy, frames_read, client->accumulated_samples);
+            }
+        }
+        
+        // When we have enough samples (320), encode with Opus
+        if (client->accumulated_samples >= client->target_frame_size) {
+            MOONMIC_LOG("[OPUS_ENCODE] Encoding %zu samples from accumulation buffer", client->accumulated_samples);
+            MOONMIC_LOG("[OPUS_ENCODE] First 10 buffer samples: %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f",
+                       client->accumulation_buffer[0], client->accumulation_buffer[1],
+                       client->accumulation_buffer[2], client->accumulation_buffer[3],
+                       client->accumulation_buffer[4], client->accumulation_buffer[5],
+                       client->accumulation_buffer[6], client->accumulation_buffer[7],
+                       client->accumulation_buffer[8], client->accumulation_buffer[9]);
+            
+            int encoded_bytes = moonmic_opus_encoder_encode(
+                client->encoder,
+                client->accumulation_buffer,
+                client->target_frame_size,
+                opus_buffer + MOONMIC_HEADER_SIZE,
+                4000 - MOONMIC_HEADER_SIZE
+            );
+            
+            MOONMIC_LOG("[OPUS_ENCODE] Encoded result: %d bytes", encoded_bytes);
+            
+            if (encoded_bytes < 0) {
+                if (client->error_callback) {
+                    client->error_callback("Opus encoding failed", client->error_userdata);
+                }
+                client->accumulated_samples = 0;  // Reset on error
+                MOONMIC_LOG("[OPUS_ENCODE] ERROR: Encoding failed, resetting buffer");
+                continue;
+            }
+            
+            uint32_t packet_sample_rate = client->config.sample_rate;  // No RAW flag
+            
+            // Prepare packet header
+            uint8_t* header_ptr = opus_buffer;
+            uint32_t magic = MOONMIC_MAGIC;
+            header_ptr[0] = (magic >> 0) & 0xFF;
+            header_ptr[1] = (magic >> 8) & 0xFF;
+            header_ptr[2] = (magic >> 16) & 0xFF;
+            header_ptr[3] = (magic >> 24) & 0xFF;
+            
+            uint32_t seq = client->sender->sequence++;
+            header_ptr[4] = (seq >> 0) & 0xFF;
+            header_ptr[5] = (seq >> 8) & 0xFF;
+            header_ptr[6] = (seq >> 16) & 0xFF;
+            header_ptr[7] = (seq >> 24) & 0xFF;
+            
+            uint64_t ts = moonmic_get_timestamp_us();
+            header_ptr[8] = (ts >> 0) & 0xFF;
+            header_ptr[9] = (ts >> 8) & 0xFF;
+            header_ptr[10] = (ts >> 16) & 0xFF;
+            header_ptr[11] = (ts >> 24) & 0xFF;
+            header_ptr[12] = (ts >> 32) & 0xFF;
+            header_ptr[13] = (ts >> 40) & 0xFF;
+            header_ptr[14] = (ts >> 48) & 0xFF;
+            header_ptr[15] = (ts >> 56) & 0xFF;
+            
+            header_ptr[16] = (packet_sample_rate >> 0) & 0xFF;
+            header_ptr[17] = (packet_sample_rate >> 8) & 0xFF;
+            header_ptr[18] = (packet_sample_rate >> 16) & 0xFF;
+            header_ptr[19] = (packet_sample_rate >> 24) & 0xFF;
+            
+            // Send via UDP
+            size_t total_size = MOONMIC_HEADER_SIZE + encoded_bytes;
+            udp_sender_send(client->sender, opus_buffer, total_size);
+            
+            // Reset accumulation buffer for next frame
+            client->accumulated_samples = 0;
         }
     }
     
@@ -174,6 +298,38 @@ moonmic_client_t* moonmic_create(const moonmic_config_t* config) {
     
     // Copy configuration
     client->config = *config;
+    
+    // Copy strings to internal storage to prevent dangling pointers
+    if (config->uniqueid && config->uniqueid[0]) {
+        strncpy(client->uniqueid_storage, config->uniqueid, sizeof(client->uniqueid_storage) - 1);
+        client->uniqueid_storage[sizeof(client->uniqueid_storage) - 1] = '\0';
+        client->config.uniqueid = client->uniqueid_storage;
+    } else {
+        client->uniqueid_storage[0] = '\0';
+        client->config.uniqueid = NULL;
+    }
+    
+    if (config->devicename && config->devicename[0]) {
+        strncpy(client->devicename_storage, config->devicename, sizeof(client->devicename_storage) - 1);
+        client->devicename_storage[sizeof(client->devicename_storage) - 1] = '\0';
+        client->config.devicename = client->devicename_storage;
+    } else {
+        client->devicename_storage[0] = '\0';
+        client->config.devicename = NULL;
+    }
+    
+    MOONMIC_LOG("[moonmic_create] Copied strings: uniqueid='%s', devicename='%s'", 
+                client->config.uniqueid ? client->config.uniqueid : "(null)",
+                client->config.devicename ? client->config.devicename : "(null)");
+    
+    // Initialize state
+    client->handshake_sent = false;
+
+    
+    // Initialize accumulation buffer (for Opus frame batching)
+    client->accumulation_buffer = NULL;
+    client->accumulated_samples = 0;
+    client->target_frame_size = 320;  // 20ms @ 16kHz (valid Opus frame size)
     
     // Set defaults
     if (client->config.port == 0) {
@@ -224,32 +380,33 @@ moonmic_client_t* moonmic_create(const moonmic_config_t* config) {
         return NULL;
     }
     
-    MOONMIC_LOG("[moonmic_create] Creating Opus encoder");
     
-    // Use 16kHz for Vita (matching hardware), 48kHz for other platforms
-   uint32_t encoder_sample_rate = client->config.sample_rate;
-    uint32_t encoder_bitrate = client->config.bitrate;
-    
-#ifdef __vita__
-    // Vita captures at 16kHz (hardware), encode at same rate
-    // Host will resample 16kHz→48kHz for output
-    encoder_sample_rate = 16000;
-    encoder_bitrate = 24000;  // 24kbps is optimal for 16kHz mono VOIP
-    MOONMIC_LOG("[moonmic_create] Using 16kHz for Opus (matching Vita mic hardware)");
-#endif
-    
-    // Create Opus encoder
-    client->encoder = moonmic_opus_encoder_create(
-        encoder_sample_rate,
-        client->config.channels,
-        encoder_bitrate
-    );
-    if (!client->encoder) {
-        MOONMIC_LOG("[moonmic_create] ERROR: Failed to create Opus encoder");
-        client->capture->close(client->capture);
-        free(client->capture);
-        free(client);
-        return NULL;
+    // Create Opus encoder (skip in RAW mode)
+    if (client->config.raw_mode) {
+        MOONMIC_LOG("[moonmic_create] RAW mode enabled - skipping Opus encoder");
+        client->encoder = NULL;
+    } else {
+        MOONMIC_LOG("[moonmic_create] Creating Opus encoder");
+        
+        // Get native sample rate from platform (e.g., 16kHz for Vita)
+        uint32_t encoder_sample_rate = client->capture->get_native_sample_rate(client->capture);
+        uint32_t encoder_bitrate = client->config.bitrate;
+        
+        MOONMIC_LOG("[moonmic_create] Using %uHz for Opus (platform native rate)", encoder_sample_rate);
+        
+        // Create Opus encoder
+        client->encoder = moonmic_opus_encoder_create(
+            encoder_sample_rate,
+            client->config.channels,
+            encoder_bitrate
+        );
+        if (!client->encoder) {
+            MOONMIC_LOG("[moonmic_create] ERROR: Failed to create Opus encoder");
+            client->capture->close(client->capture);
+            free(client->capture);
+            free(client);
+            return NULL;
+        }
     }
     
     MOONMIC_LOG("[moonmic_create] Creating UDP sender to %s:%d", client->config.host_ip, client->config.port);
@@ -257,11 +414,33 @@ moonmic_client_t* moonmic_create(const moonmic_config_t* config) {
     client->sender = udp_sender_create(client->config.host_ip, client->config.port);
     if (!client->sender) {
         MOONMIC_LOG("[moonmic_create] ERROR: Failed to create UDP sender");
-        moonmic_opus_encoder_destroy(client->encoder);
-        client->capture->close(client->capture);
-        free(client->capture);
-        free(client);
+        moonmic_destroy(client);
         return NULL;
+    }
+    
+    // Create heartbeat monitor
+    MOONMIC_LOG("[moonmic_create] Creating heartbeat monitor");
+    client->heartbeat_monitor = heartbeat_monitor_create(client->config.port);
+    if (!client->heartbeat_monitor) {
+        MOONMIC_LOG("[moonmic_create] WARNING: Failed to create heartbeat monitor (connection status unavailable)");
+        // Not fatal - continue without connection monitoring
+    }
+    
+    // Allocate accumulation buffer for Opus mode (for 320-sample batching)
+    if (!client->config.raw_mode) {
+        size_t buffer_size = client->target_frame_size * client->config.channels;
+        client->accumulation_buffer = (float*)malloc(buffer_size * sizeof(float));
+        if (!client->accumulation_buffer) {
+            MOONMIC_LOG("[moonmic_create] ERROR: Failed to allocate accumulation buffer");
+            udp_sender_destroy(client->sender);
+            moonmic_opus_encoder_destroy(client->encoder);
+            client->capture->close(client->capture);
+            free(client->capture);
+            free(client);
+            return NULL;
+        }
+        memset(client->accumulation_buffer, 0, buffer_size * sizeof(float));
+        MOONMIC_LOG("[moonmic_create] Allocated accumulation buffer: %zu samples", buffer_size);
     }
     
     MOONMIC_LOG("[moonmic_create] Client created successfully");
@@ -293,7 +472,15 @@ void moonmic_destroy(moonmic_client_t* client) {
         free(client->capture);
     }
     
+    if (client->accumulation_buffer) {
+        free(client->accumulation_buffer);
+    }
+    if (client->heartbeat_monitor) {
+        heartbeat_monitor_destroy(client->heartbeat_monitor);
+    }
+    
     free(client);
+    MOONMIC_LOG("[moonmic_destroy] Client destroyed");
 }
 
 bool moonmic_start(moonmic_client_t* client) {
@@ -407,4 +594,21 @@ void moonmic_thread_join(void* thread_handle) {
     pthread_join(*thread, NULL);
     free(thread);
 #endif
+}
+
+void moonmic_set_gain(moonmic_client_t* client, float gain) {
+    if (client) {
+        client->config.gain = gain;
+    }
+}
+
+moonmic_connection_status_t moonmic_get_connection_status(moonmic_client_t* client) {
+    if (!client || !client->heartbeat_monitor) {
+        return MOONMIC_DISCONNECTED;
+    }
+    return heartbeat_monitor_get_status(client->heartbeat_monitor);
+}
+
+bool moonmic_is_connected(moonmic_client_t* client) {
+    return moonmic_get_connection_status(client) == MOONMIC_CONNECTED;
 }

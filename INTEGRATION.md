@@ -40,6 +40,8 @@ sudo apt-get install libopus-dev libpulse-dev
 
 ## Basic Usage
 
+### Simple Configuration (No Validation)
+
 ```cpp
 #include "moonmic.h"
 
@@ -62,6 +64,35 @@ if (mic) {
     moonmic_stop(mic);
     moonmic_destroy(mic);
 }
+```
+
+### Secure Configuration (With Sunshine Validation)
+
+```cpp
+#include "moonmic.h"
+
+// Application performs Sunshine validation first
+int pair_status = validate_with_sunshine(host_ip);  // Application-specific
+std::string uniqueid = read_uniqueid_from_keydir(); // Application-specific
+
+moonmic_config_t config = {
+    .host_ip = "192.168.1.100",
+    .port = 48100,
+    .sample_rate = 48000,
+    .channels = 1,
+    .bitrate = 64000,
+    .auto_start = true,
+    
+    // Sunshine validation fields
+    .uniqueid = uniqueid.c_str(),     // Client unique identifier (16 chars)
+    .devicename = "PS Vita",          // Human-readable device name
+    .sunshine_https_port = 47984,     // Sunshine HTTPS port
+    .pair_status = pair_status        // Result from validation (0 or 1)
+};
+
+moonmic_client_t* mic = moonmic_create(&config);
+// Client sends handshake packet with validation data
+// Host accepts/rejects based on PairStatus and whitelist setting
 ```
 
 ## Integration with GameStreamClient
@@ -229,15 +260,32 @@ See `moonmic.h` for full API documentation.
 ### Configuration Structure
 
 ```c
-typedef struct moonmic_config {
-    const char* host_ip;      // Host PC IP address
-    int port;                 // UDP port (default: 48100)
-    int sample_rate;          // Sample rate in Hz (default: 48000)
-    int channels;             // 1 = mono, 2 = stereo
-    int bitrate;              // Opus bitrate in bps (default: 64000)
-    bool auto_start;          // Start immediately after creation
+typedef struct {
+    // Core audio settings
+    const char* host_ip;          // Host PC IP address
+    uint16_t port;                // UDP port (default: 48100)
+    uint32_t sample_rate;         // Sample rate in Hz (default: 48000)
+    uint8_t channels;             // 1 = mono, 2 = stereo
+    uint32_t bitrate;             // Opus bitrate in bps (default: 64000)
+    bool raw_mode;                // true = RAW PCM, false = Opus compression
+    bool auto_start;              // Start immediately after creation
+    float gain;                   // Gain multiplier (1.0-100.0, default: 10.0)
+    
+    // Sunshine validation (optional)
+    const char* uniqueid;         // Client uniqueid (16 chars, optional)
+    const char* devicename;       // Device name for identification (optional)
+    int sunshine_https_port;      // Sunshine HTTPS port (default: 47984, 0=skip)
+    const char* cert_path;        // Path to client.pem (optional, for reference)
+    const char* key_path;         // Path to key.pem (optional, for reference)
+    int pair_status;              // Pair status from validation (0=unpaired, 1=paired)
 } moonmic_config_t;
 ```
+
+**Validation Fields**:
+- Leave `uniqueid`, `devicename`, `cert_path`, `key_path` as `NULL` to skip validation
+- Set `pair_status = 0` if no validation performed
+- Set `pair_status = 1` if validated with Sunshine
+- If host has `enable_whitelist = true`, `pair_status` must be 1 to connect
 
 ## Performance Tips
 

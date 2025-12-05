@@ -85,9 +85,11 @@ To use the virtual microphone in your applications:
 
 You'll see in moonmic-host:
 ```
-[AudioReceiver] Client connected: 192.168.x.x
+[AudioReceiver] Client validated: PS Vita (0123456789ABCDEF)
 [AudioReceiver] Receiving audio...
 ```
+
+The client name and uniqueid appear after successful handshake validation.
 
 ## Troubleshooting
 
@@ -109,12 +111,36 @@ You'll see in moonmic-host:
 - Ensure the application is capturing from "CABLE Output"
 - Verify moonmic-host shows "[AudioReceiver] Receiving audio..."
 
-### Sunshine Integration
+### Client Validation (Security)
 
-moonmic-host automatically detects Sunshine and its paired clients for security.
-If Sunshine is detected, only paired clients from `sunshine_state.json` can connect.
+moonmic-host uses **PairStatus-based validation** for security:
 
-Location: `Sunshine\config\sunshine_state.json`
+**How it works:**
+1. Client calls Sunshine's `/serverinfo` endpoint (HTTPS + client certificate)
+2. Sunshine returns PairStatus (1=paired, 0=unpaired)
+3. Client sends handshake with PairStatus to moonmic-host
+4. Host validates:
+   - `enable_whitelist=false` → Accept all clients
+   - `enable_whitelist=true` + `PairStatus=1` → Accept connection  
+   - `enable_whitelist=true` + `PairStatus≠1` → Reject connection
+
+**What you'll see:**
+- Paired client: `[AudioReceiver] Client validated: PS Vita (uniqueid)`
+- Unpaired client: `[AudioReceiver] DENY: Client not paired (PairStatus=0)`
+- Whitelist disabled: `[AudioReceiver] Client connected: PS Vita [whitelist disabled]`
+
+**Configuration:**
+- Set `enable_whitelist: true` in config for strict security
+- Set `enable_whitelist: false` for testing (accepts all clients)
+
+### Sunshine Web UI (Optional GUI Feature)
+
+The GUI includes Sunshine Web UI integration for **debugging only**:
+- View list of paired clients in Sunshine Settings
+- Monitor Sunshine connection status
+- **NOT required** for client validation
+
+To use: Click "Login to Sunshine Web UI" in the GUI and enter credentials.
 
 ## Important Files
 

@@ -10,7 +10,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-
+#include "heartbeat_monitor.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -28,7 +28,7 @@ extern "C" {
 #define MOONMIC_DEFAULT_CHANNELS 1
 
 /** Default Opus bitrate (bps) - optimal for 16kHz mono VOIP */
-#define MOONMIC_DEFAULT_BITRATE 24000
+#define MOONMIC_DEFAULT_BITRATE 64000  // 64kbps for high-quality voice
 
 /** Default UDP port for microphone transmission */
 #define MOONMIC_DEFAULT_PORT 48100
@@ -44,23 +44,22 @@ typedef struct moonmic_client_t moonmic_client_t;
  * @brief Configuration for MoonMic client
  */
 typedef struct {
-    /** IP address of the host (required) */
-    const char* host_ip;
+    const char* host_ip;       /**< Host IP address */
+    uint16_t port;            /**< UDP port (default: 48100) */
+    uint32_t sample_rate;     /**< Sample rate in Hz (default: 16000) */
+    uint8_t channels;         /**< Number of channels (default: 1 = mono) */
+    uint32_t bitrate;         /**< Opus bitrate in bps (default: 24000) */
+    bool raw_mode;            /**< True = RAW PCM, False = Opus compression */
+    bool auto_start;          /**< Auto-start capture after init */
+    float gain;               /**< Gain multiplier (1.0-100.0, default: 10.0) */
     
-    /** UDP port for transmission (default: 48100) */
-    uint16_t port;
-    
-    /** Audio sample rate in Hz (default: 48000) */
-    uint32_t sample_rate;
-    
-    /** Number of audio channels: 1 (mono) or 2 (stereo) (default: 1) */
-    uint8_t channels;
-    
-    /** Opus bitrate in bits/second (default: 64000) */
-    uint32_t bitrate;
-    
-    /** Auto-start transmission when created (default: true) */
-    bool auto_start;
+    // NEW: Sunshine validation (optional, can be NULL)
+    const char* uniqueid;     /**< Client uniqueid (16 chars, optional) */
+    const char* devicename;   /**< Device name for identification (optional) */
+    int sunshine_https_port;  /**< Sunshine HTTPS port (default: 47984, 0=skip validation) */
+    const char* cert_path;    /**< Path to client certificate PEM (optional) */
+    const char* key_path;     /**< Path to client key PEM (optional) */
+    int pair_status;          /**< Pair status from Sunshine validation (0=unknown/fail, 1=paired) */
 } moonmic_config_t;
 
 /**
@@ -121,6 +120,13 @@ void moonmic_set_error_callback(moonmic_client_t* client,
                                 void* userdata);
 
 /**
+ * @brief Update gain multiplier during transmission
+ * @param client Client instance
+ * @param gain New gain multiplier (1.0 = no change, higher = louder)
+ */
+void moonmic_set_gain(moonmic_client_t* client, float gain);
+
+/**
  * @brief Set status callback
  * @param client Client instance
  * @param callback Callback function (can be NULL to disable)
@@ -131,10 +137,24 @@ void moonmic_set_status_callback(moonmic_client_t* client,
                                  void* userdata);
 
 /**
+ * @brief Get current connection status
+ * @param client Client instance
+ * @return Connection status (MOONMIC_CONNECTED or MOONMIC_DISCONNECTED)
+ */
+moonmic_connection_status_t moonmic_get_connection_status(moonmic_client_t* client);
+
+/**
+ * @brief Check if client is connected to host
+ * @param client Client instance
+ * @return true if connected, false otherwise
+ */
+bool moonmic_is_connected(moonmic_client_t* client);
+
+/**
  * @brief Get library version string
  * @return Version string (e.g., "1.0.0")
  */
-const char* moonmic_version(void);
+const char* moonmic_get_version();
 
 #ifdef __cplusplus
 }

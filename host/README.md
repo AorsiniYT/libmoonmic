@@ -11,8 +11,11 @@ Cross-platform host application for receiving microphone audio from Moonlight cl
 - ✅ **Cross-platform**: Windows and Linux support
 - ✅ **Virtual Microphone**: VB-CABLE integration (Windows) or PulseAudio (Linux)
 - ✅ **GUI + Console**: Dear ImGui interface or headless mode
+- ✅ **PairStatus Validation**: Certificate-based client authentication
+- ✅ **Handshake Protocol**: Secure pre-stream client verification
+- ✅ **Client Name Display**: Shows connected device identifier
 - ✅ **Sunshine Integration**: Automatic client whitelist from Sunshine paired devices
-- ✅ **Real-time Stats**: Packets received, dropped, bandwidth, sender IP
+- ✅ **Real-time Stats**: Packets received, dropped, bandwidth, sender IP, client name
 - ✅ **Auto-installation**: VB-CABLE driver installer (Windows)
 - ✅ **Low Latency**: Opus decoding with adaptive buffering
 
@@ -94,8 +97,9 @@ make
 Shows real-time interface with:
 - Sunshine integration status
 - Paired clients list
-- Reception statistics
-- Configuration options
+- Connected client name and validation status
+- Reception statistics (packets, bytes, latency)
+- Configuration options (whitelist, port, etc.)
 - Start/Stop controls
 
 ### Console Mode
@@ -145,6 +149,7 @@ Example configuration:
     "sync_with_sunshine": true,
     "allowed_clients": []
   },
+  "NOTE": "When enable_whitelist=true, only clients with PairStatus=1 are accepted"
   "gui": {
     "show_on_startup": true,
     "theme": "dark"
@@ -152,14 +157,18 @@ Example configuration:
 }
 ```
 
-## Sunshine Integration
+## Client Validation
 
-moonmic-host automatically detects Sunshine installation and reads paired clients:
+moonmic-host validates clients using the **PairStatus handshake protocol**:
 
-**Windows**: `%APPDATA%\Sunshine\state.json`  
-**Linux**: `~/.config/sunshine/state.json`
+1. **Client validates with Sunshine** (via HTTPS `/serverinfo` with client certificate)
+2. **Client sends handshake** to moonmic-host with `PairStatus`
+3. **Host validates handshake**:
+   - `enable_whitelist=false` → Accept all clients
+   - `enable_whitelist=true` + `PairStatus=1` → Accept (paired)
+   - `enable_whitelist=true` + `PairStatus≠1` → Reject (unpaired)
 
-Only paired clients can transmit audio when whitelist is enabled.
+**Important**: The host does NOT query `sunshine_state.json` or Sunshine APIs for validation. All validation is based on the PairStatus sent by the client in the handshake packet.
 
 ## VB-CABLE Driver (Windows)
 
@@ -268,15 +277,25 @@ GUI shows real-time stats:
 - Packets received/dropped
 - Bytes transferred
 - Sender IP address
+- Connected client name
+- Client validation status (PairStatus)
 - Reception status
 - Sunshine paired clients
 
-## Security
+## Sunshine Web UI Integration (Optional)
 
-When Sunshine integration is enabled:
-- Only paired clients can transmit
-- Whitelist syncs automatically
-- Unknown clients are rejected
+The host application includes Sunshine Web UI integration for **debugging and GUI features only**:
+
+- **Display paired clients** in Sunshine Settings GUI
+- **Monitor Sunshine status** in main GUI
+- **NOT used for client validation** - Validation uses PairStatus handshake
+
+**To use Web UI features:**
+1. Click "Login to Sunshine Web UI" in GUI
+2. Enter Sunshine Web UI credentials
+3. View paired clients list in Sunshine Settings
+
+**Note**: This is optional. Client validation works without Web UI login.
 
 ## License
 

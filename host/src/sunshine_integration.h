@@ -1,87 +1,38 @@
 /**
  * @file sunshine_integration.h
- * @brief Integration with Sunshine to read paired clients
+ * @brief Simplified Sunshine integration - only tracks pairing status from config
  */
 
 #pragma once
 
 #include <string>
-#include <vector>
-#include <nlohmann/json.hpp>
 
 namespace moonmic {
 
-/**
- * @brief Information about a paired Sunshine client
- */
-struct PairedClient {
-    std::string name;
-    std::string uuid;
-};
+// Forward declaration
+class Config;
 
 /**
- * @brief Sunshine integration manager
+ * @brief Sunshine integration manager (simplified)
+ * Only tracks pairing status from config, no file parsing
  */
 class SunshineIntegration {
 public:
-    SunshineIntegration();
+    SunshineIntegration(Config& config);
     
     /**
-     * @brief Detect if Sunshine is installed
-     * @return true if Sunshine is found
+     * @brief Check if moonmic-host is paired with Sunshine
+     * @return true if config says we're paired
      */
-    bool detectSunshine();
+    bool isPaired() const;
     
     /**
-     * @brief Get the path to Sunshine's state file
-     * @return Path to state file, or empty if not found
-     */
-    std::string getSunshineStatePath();
-    
-    /**
-     * @brief Load paired clients from Sunshine
-     * @return List of paired clients
-     */
-    std::vector<PairedClient> loadPairedClients();
-    
-    /**
-     * @brief Check if a client UUID is in the paired list
-     * @param uuid Client UUID to check
-     * @return true if client is paired
-     */
-    bool isClientPaired(const std::string& uuid);
-    
-    /**
-     * @brief Check if Sunshine was detected
-     * @return true if Sunshine is detected
-     */
-    bool isSunshineDetected() const { return sunshine_detected_; }
-    
-    /**
-     * @brief Get cached paired clients
-     * @return Reference to paired clients list
-     */
-    const std::vector<PairedClient>& getPairedClients() const { return paired_clients_; }
-    
-    /**
-     * @brief Reload paired clients from Sunshine
+     * @brief Reload paired status from config
      */
     void reload();
     
 private:
-    std::string state_file_path_;
-    std::vector<PairedClient> paired_clients_;
-    bool sunshine_detected_;
-    
-    /**
-     * @brief Find Sunshine installation directory
-     */
-    std::string findSunshineDir();
-    
-    /**
-     * @brief Parse Sunshine state file
-     */
-    bool parseStateFile(const std::string& path);
+    Config& config_;
 };
 
 } // namespace moonmic

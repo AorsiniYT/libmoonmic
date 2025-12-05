@@ -37,6 +37,7 @@ libmoonmic/
 ├── moonmic.h                    # Public C API
 ├── moonmic_internal.h           # Internal types
 ├── moonmic_client.cpp           # Main client implementation
+├── heartbeat_monitor.h          # Connection heartbeat API
 ├── CMakeLists.txt
 ├── README.md
 ├── INTEGRATION.md               # Integration guide
@@ -46,21 +47,34 @@ libmoonmic/
 │   └── udp_sender.cpp           # UDP transmission
 ├── platform/                    # Platform-specific implementations
 │   ├── psvita/
-│   │   └── audio_capture_vita.cpp
+│   │   ├── platform_config.h
+│   │   ├── audio_capture_vita.cpp
+│   │   └── heartbeat_monitor.cpp      # PS Vita connection monitor
 │   ├── windows/
-│   │   └── audio_capture_windows.cpp
+│   │   ├── platform_config.h
+│   │   ├── audio_capture_windows.cpp
+│   │   └── heartbeat_monitor.cpp      # Windows connection monitor
 │   └── linux/
-│       └── audio_capture_linux.cpp
-├── examples/
-│   └── integration_example.cpp
+│       ├── platform_config.h
+│       ├── audio_capture_linux.cpp
+│       └── heartbeat_monitor.cpp      # Linux connection monitor
 └── host/                        # Host application
     ├── CMakeLists.txt
     ├── README.md
+    ├── QUICKSTART.md
     ├── driver/                  # VB-CABLE driver (Windows)
     └── src/
         ├── main.cpp
         ├── config.cpp
         ├── audio_receiver.cpp
+        ├── network/
+        │   ├── udp_receiver.cpp
+        │   └── connection_monitor.cpp   # Host ping sender
+        ├── codec/
+        │   └── ffmpeg_decoder.cpp
+        ├── platform/
+        │   ├── windows/
+        │   └── linux/
         └── ...
 ```
 
@@ -72,6 +86,9 @@ libmoonmic/
 - ✅ Modular platform architecture
 - ✅ Opus encoding (64 kbps mono / 96 kbps stereo)
 - ✅ UDP transmission with packet validation
+- ✅ **Sunshine client validation** - Certificate-based authentication
+- ✅ **Secure handshake protocol** - Pre-stream client verification
+- ✅ **Connection heartbeat** - Real-time connection status monitoring (<0.2% CPU)
 - ✅ Low latency (10ms frames @ 48kHz)
 - ✅ Auto-start capability
 - ✅ Error callbacks
@@ -83,7 +100,10 @@ libmoonmic/
 - ✅ **Single instance** - Prevents multiple copies with window bring-to-front
 - ✅ Dear ImGui GUI + console mode
 - ✅ **Auto-save configuration** - Changes persist automatically
-- ✅ Sunshine integration (paired clients whitelist sync)
+- ✅ **Client validation** - PairStatus-based security
+- ✅ **Connection monitoring** - Active heartbeat ping system for real-time status
+- ✅ **Sunshine integration** - Paired clients whitelist sync (Web UI login only, PIN pairing disabled)
+- ✅ **Client name display** - Shows connected device in stats
 - ✅ **VB-CABLE embedded** - All driver files included in .exe (Windows)
 - ✅ **One-click driver installation** - GUI button or `--install-driver` command
 - ✅ Virtual audio device injection (WASAPI/PulseAudio)
@@ -98,6 +118,7 @@ libmoonmic/
 ```cpp
 #include "moonmic.h"
 
+// Basic configuration (no validation)
 moonmic_config_t config = {
     .host_ip = "192.168.1.100",
     .port = 48100,
@@ -111,6 +132,24 @@ moonmic_client_t* mic = moonmic_create(&config);
 // Transmitting automatically...
 
 moonmic_destroy(mic);
+
+// Advanced: With Sunshine validation
+moonmic_config_t secure_config = {
+    .host_ip = "192.168.1.100",
+    .port = 48100,
+    .sample_rate = 48000,
+    .channels = 1,
+    .bitrate = 64000,
+    .auto_start = true,
+    
+    // Security (validated by application layer)
+    .uniqueid = "0123456789ABCDEF",     // From uniqueid.dat
+    .devicename = "PS Vita",              // Device identifier
+    .pair_status = 1                      // From Sunshine validation
+};
+
+moonmic_client_t* mic = moonmic_create(&secure_config);
+// Client will send handshake with PairStatus before audio
 ```
 
 ### Host Application
@@ -254,3 +293,7 @@ Contributions welcome! To add a new platform:
 - **VB-Audio Software** - VB-CABLE virtual audio driver
 - **Xiph.Org** - Opus audio codec
 - **Dear ImGui** - Immediate mode GUI library
+
+## Support
+
+If you need more help, join the [#vita-help channel in Discord](https://discord.gg/rf5pkZvpJ3).

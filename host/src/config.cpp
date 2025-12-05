@@ -46,6 +46,7 @@ bool Config::load(const std::string& path) {
             if (a.contains("sample_rate")) audio.sample_rate = a["sample_rate"];  // Backward compat
             if (a.contains("channels")) audio.channels = a["channels"];
             if (a.contains("buffer_size_ms")) audio.buffer_size_ms = a["buffer_size_ms"];
+            if (a.contains("use_speaker_mode")) audio.use_speaker_mode = a["use_speaker_mode"];
         }
         
         // Load security settings
@@ -60,6 +61,18 @@ bool Config::load(const std::string& path) {
                     security.allowed_clients.push_back(client);
                 }
             }
+        }
+        
+        // Load Sunshine settings
+        if (j.contains("sunshine")) {
+            auto sun = j["sunshine"];
+            if (sun.contains("host")) sunshine.host = sun["host"];
+            if (sun.contains("port")) sunshine.port = sun["port"];
+            if (sun.contains("webui_port")) sunshine.webui_port = sun["webui_port"];
+            if (sun.contains("paired")) sunshine.paired = sun["paired"];
+            if (sun.contains("webui_logged_in")) sunshine.webui_logged_in = sun["webui_logged_in"];
+            if (sun.contains("webui_username")) sunshine.webui_username = sun["webui_username"];
+            if (sun.contains("webui_password_encrypted")) sunshine.webui_password_encrypted = sun["webui_password_encrypted"];
         }
         
         // Load GUI settings
@@ -91,11 +104,21 @@ bool Config::save(const std::string& path) {
         j["audio"]["sample_rate"] = audio.sample_rate;  // Deprecated, for backward compat
         j["audio"]["channels"] = audio.channels;
         j["audio"]["buffer_size_ms"] = audio.buffer_size_ms;
+        j["audio"]["use_speaker_mode"] = audio.use_speaker_mode;
         
         j["security"]["enable_whitelist"] = security.enable_whitelist;
         j["security"]["sync_with_sunshine"] = security.sync_with_sunshine;
         j["security"]["sunshine_state_file"] = security.sunshine_state_file;
         j["security"]["allowed_clients"] = security.allowed_clients;
+        
+        // Sunshine settings
+        j["sunshine"]["host"] = sunshine.host;
+        j["sunshine"]["port"] = sunshine.port;
+        j["sunshine"]["webui_port"] = sunshine.webui_port;
+        j["sunshine"]["paired"] = sunshine.paired;
+        j["sunshine"]["webui_logged_in"] = sunshine.webui_logged_in;
+        j["sunshine"]["webui_username"] = sunshine.webui_username;
+        j["sunshine"]["webui_password_encrypted"] = sunshine.webui_password_encrypted;
         
         j["gui"]["show_on_startup"] = gui.show_on_startup;
         j["gui"]["minimize_to_tray"] = gui.minimize_to_tray;

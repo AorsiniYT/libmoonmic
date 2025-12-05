@@ -25,15 +25,22 @@ configure_file(
 
 # Source files
 set(SOURCES
-    src/main.cpp
-    src/config.cpp
-    src/sunshine_integration.cpp
-    src/audio_receiver.cpp
-    src/codec/opus_decoder.cpp
+    src/codec/ffmpeg_decoder.cpp
     src/network/udp_receiver.cpp
+    src/network/connection_monitor.cpp
+    src/sunshine_integration.cpp
+    src/config.cpp
+    src/main.cpp
+    src/audio_receiver.cpp
+    src/sunshine_webui.cpp
+    src/sunshine_settings_gui.cpp
+    src/display_settings_gui.cpp
     src/single_instance.cpp
+    src/display_manager.cpp
     src/version_checker.cpp
+    src/debug_gui.cpp
 )
+
 
 # Platform-specific sources
 if(HOST_TARGET_WINDOWS OR (WIN32 AND NOT HOST_TARGET_LINUX))
@@ -75,6 +82,21 @@ endif()
 # Create executable
 add_executable(moonmic-host ${SOURCES})
 
+# Include third_party FIRST (builds OpenSSL if available)
+add_subdirectory(third_party)
+
+# CRITICAL: Ensure all external dependencies are built BEFORE linking moonmic-host
+# This prevents race conditions in parallel builds
+if(TARGET curl_build)
+    add_dependencies(moonmic-host curl_build)
+endif()
+if(TARGET ffmpeg_build)
+    add_dependencies(moonmic-host ffmpeg_build)
+endif()
+if(TARGET speexdsp)
+    add_dependencies(moonmic-host speexdsp)
+endif()
+
 # Include directories
 target_include_directories(moonmic-host PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -96,6 +118,44 @@ endif()
 # Find dependencies
 find_package(Threads REQUIRED)
 target_link_libraries(moonmic-host PRIVATE Threads::Threads)
+
+
+# CURL for HTTP client (required for pairing)
+# Use built CURL from third_party if available, otherwise use system
+if(CURL_FOUND AND CURL_LIB_PATH)
+    # Using built CURL from submodule with absolute path
+    message(STATUS "Using built CURL from submodule")
+    message(STATUS "  CURL lib: ${CURL_LIB_PATH}")
+    target_link_libraries(moonmic-host PRIVATE ${CURL_LIB_PATH})
+    target_include_directories(moonmic-host PRIVATE ${CURL_INCLUDE_DIRS})
+    # Define CURL_STATICLIB for static linking on Windows
+    if(WIN32)
+        target_compile_definitions(moonmic-host PRIVATE CURL_STATICLIB)
+    endif()
+else()
+    # Fallback to system CURL
+    find_package(CURL REQUIRED)
+    target_link_libraries(moonmic-host PRIVATE CURL::libcurl)
+    message(STATUS "Using system CURL")
+endif()
+
+# Windows-specific system libraries for CURL with SChannel
+if(WIN32)
+    # CURL requires Winsock, LDAP, and SChannel libraries for HTTPS
+    target_link_libraries(moonmic-host PRIVATE
+        ws2_32     # Winsock2
+        wldap32    # Windows LDAP (needed by CURL)
+        iphlpapi   # IP Helper API (if_nametoindex for CURL)
+        crypt32    # Windows Crypto API (SChannel)
+        bcrypt     # Windows crypto primitives (SChannel)
+    )
+    message(STATUS "Linked Windows system libraries for CURL with SChannel")
+else()
+    # Linux: CURL uses system OpenSSL, need to link it
+    find_package(OpenSSL REQUIRED)
+    target_link_libraries(moonmic-host PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    message(STATUS "Linked system OpenSSL for CURL HTTPS support")
+endif()
 
 # nlohmann/json (Header only)
 set(JSON_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/json)
@@ -120,48 +180,66 @@ if(HOST_TARGET_WINDOWS OR (WIN32 AND NOT HOST_TARGET_LINUX))
     endif()
 endif()
 
-# Opus
+# FFmpeg (Static build from submodule)
+# FFmpeg is built automatically from the git submodule at third_party/ffmpeg
+message(STATUS "Configuring FFmpeg static build...")
+
+# Link against static FFmpeg libraries
+target_link_libraries(moonmic-host PRIVATE ${FFMPEG_LIBRARIES})
+target_include_directories(moonmic-host PRIVATE ${FFMPEG_INCLUDE_DIRS})
+
+# Windows: FFmpeg static libraries require additional system libraries
 if(HOST_TARGET_WINDOWS OR (WIN32 AND NOT HOST_TARGET_LINUX))
-    # Build Opus from source for Windows
-    set(OPUS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/opus)
-    if(EXISTS ${OPUS_DIR}/CMakeLists.txt)
-        # Disable Opus examples and tests
-        set(OPUS_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
-        set(OPUS_BUILD_TESTING OFF CACHE BOOL "" FORCE)
-        set(OPUS_INSTALL_PKG_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
-        set(OPUS_INSTALL_CMAKE_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
-        
-        add_subdirectory(${OPUS_DIR} opus)
-        target_link_libraries(moonmic-host PRIVATE opus)
-        # Add both directories so both include paths work
-        target_include_directories(moonmic-host PRIVATE 
-            ${OPUS_DIR}/include
-            ${CMAKE_CURRENT_BINARY_DIR}/opus
+    target_link_libraries(moonmic-host PRIVATE
+        bcrypt      # For BCrypt* functions (random number generation)
+        secur32     # For security functions
+    )
+endif()
+
+message(STATUS "FFmpeg enabled (static build from submodule)")
+
+# Speex Resampler (for high-quality 16kHz->48kHz)
+if(HOST_TARGET_WINDOWS OR (WIN32 AND NOT HOST_TARGET_LINUX))
+    # Build from source for Windows
+    set(SPEEX_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/speexdsp)
+    if(EXISTS ${SPEEX_DIR}/libspeexdsp/resample.c)
+        add_library(speexdsp STATIC
+            ${SPEEX_DIR}/libspeexdsp/resample.c
         )
+        
+        target_include_directories(speexdsp PUBLIC
+            ${SPEEX_DIR}/include
+        )
+        
+        target_compile_definitions(speexdsp PRIVATE
+            EXPORT=
+            FLOATING_POINT
+            USE_SSE
+            USE_SSE2
+        )
+        
+        target_link_libraries(moonmic-host PRIVATE speexdsp)
+        target_include_directories(moonmic-host PRIVATE ${SPEEX_DIR}/include)
+        message(STATUS "Speex resampler enabled (built from source)")
     else()
-        message(FATAL_ERROR "Opus submodule not found at ${OPUS_DIR}")
+        message(WARNING "Speex submodule not found - audio quality may be degraded")
     endif()
 else()
-    # Use system Opus for Linux
+    # Use system speexdsp for Linux
     find_package(PkgConfig)
     if(PkgConfig_FOUND)
-        pkg_check_modules(OPUS opus)
+        pkg_check_modules(SPEEXDSP speexdsp)
     endif()
     
-    if(OPUS_FOUND)
-        target_link_libraries(moonmic-host PRIVATE ${OPUS_LIBRARIES})
-        target_include_directories(moonmic-host PRIVATE ${OPUS_INCLUDE_DIRS})
+    if(SPEEXDSP_FOUND)
+        target_link_libraries(moonmic-host PRIVATE ${SPEEXDSP_LIBRARIES})
+        target_include_directories(moonmic-host PRIVATE ${SPEEXDSP_INCLUDE_DIRS})
+        message(STATUS "Speex resampler enabled (system library)")
     else()
-        find_library(OPUS_LIBRARY NAMES opus)
-        find_path(OPUS_INCLUDE_DIR opus/opus.h)
-        if(OPUS_LIBRARY AND OPUS_INCLUDE_DIR)
-            target_link_libraries(moonmic-host PRIVATE ${OPUS_LIBRARY})
-            target_include_directories(moonmic-host PRIVATE ${OPUS_INCLUDE_DIR})
-        else()
-            message(FATAL_ERROR "Opus library not found")
-        endif()
+        message(WARNING "Speex library not found - install libspeexdsp-dev")
     endif()
 endif()
+
 
 # Platform-specific dependencies
 if(HOST_TARGET_WINDOWS OR (WIN32 AND NOT HOST_TARGET_LINUX))

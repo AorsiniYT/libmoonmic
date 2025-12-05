@@ -6,10 +6,12 @@
 
 #include "../virtual_device.h"
 #include "driver_installer.h"
-#define INIT GUID  // Define GUIDs in this compilation unit
+#define INITGUID  // Define GUIDs in this compilation unit
 #include <windows.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
+#include <mmreg.h>  // For WAVEFORMATEXTENSIBLE
+#include <ksmedia.h>  // For SPEAKER_FRONT_LEFT, etc
 #include <functiondiscoverykeys_devpkey.h>
 #include <iostream>
 
@@ -20,7 +22,9 @@ public:
     VirtualDeviceWindows() 
         : audio_client_(nullptr)
         , render_client_(nullptr)
-        , buffer_frame_count_(0) {
+        , buffer_frame_count_(0)
+        , system_sample_rate_(0)
+        , system_channels_(0) {
         // Initialize COM - ignore RPC_E_CHANGED_MODE if already initialized with different mode
         HRESULT hr = CoInitialize(NULL);
         if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) {
@@ -35,25 +39,58 @@ public:
     
     bool init(const std::string& device_name, int sample_rate, int channels) override {
         HRESULT hr;
+        IMMDevice* device = nullptr;
         
-        // Check if VB-CABLE is installed
-        DriverInstaller installer;
-        std::string vb_cable_input = installer.getVBCableInputDevice();
-        
-        if (vb_cable_input.empty()) {
-            std::cerr << "[VirtualDevice] VB-CABLE not detected" << std::endl;
-            std::cerr << "[VirtualDevice] Please install VB-CABLE from driver/ folder" << std::endl;
-            std::cerr << "[VirtualDevice] Or run: moonmic-host --install-driver" << std::endl;
-            return false;
-        }
-        
-        std::cout << "[VirtualDevice] Found VB-CABLE: " << vb_cable_input << std::endl;
-        
-        // Get VB-CABLE Input device (this is where we write audio)
-        IMMDevice* device = findDeviceByName(vb_cable_input);
-        if (!device) {
-            std::cerr << "[VirtualDevice] Failed to open VB-CABLE Input" << std::endl;
-            return false;
+        if (device_name.empty()) {
+            // Speaker mode: use default system audio output device
+            std::cout << "[VirtualDevice] Using default system speakers (debug mode)" << std::endl;
+            
+            IMMDeviceEnumerator* enumerator = NULL;
+            hr = CoCreateInstance(
+                __uuidof(MMDeviceEnumerator),
+                NULL,
+                CLSCTX_ALL,
+                __uuidof(IMMDeviceEnumerator),
+                (void**)&enumerator
+            );
+            
+            if (FAILED(hr)) {
+                std::cerr << "[VirtualDevice] Failed to create device enumerator" << std::endl;
+                return false;
+            }
+            
+            hr = enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &device);
+            enumerator->Release();
+            
+            if (FAILED(hr) || !device) {
+                std::cerr << "[VirtualDevice] Failed to get default audio device" << std::endl;
+                return false;
+            }
+            
+            std::cout << "[VirtualDevice] Initialized with default speakers" << std::endl;
+        } else {
+            // Normal mode: use VB-CABLE virtual microphone
+            DriverInstaller installer;
+            std::string vb_cable_input = installer.getVBCableInputDevice();
+            
+            if (vb_cable_input.empty()) {
+                std::cerr << "[VirtualDevice] VB-CABLE not detected" << std::endl;
+                std::cerr << "[VirtualDevice] Please install VB-CABLE from driver/ folder" << std::endl;
+                std::cerr << "[VirtualDevice] Or run: moonmic-host --install-driver" << std::endl;
+                return false;
+            }
+            
+            std::cout << "[VirtualDevice] Found VB-CABLE: " << vb_cable_input << std::endl;
+            
+            // Get VB-CABLE Input device
+            device = findDeviceByName(vb_cable_input);
+            if (!device) {
+                std::cerr << "[VirtualDevice] Failed to open VB-CABLE Input" << std::endl;
+                return false;
+            }
+            
+            std::cout << "[VirtualDevice] Initialized with VB-CABLE Input" << std::endl;
+            std::cout << "[VirtualDevice] Virtual microphone: CABLE Output" << std::endl;
         }
         
         // Activate audio client
@@ -70,32 +107,92 @@ public:
             return false;
         }
         
-        // Get mix format
-        WAVEFORMATEX* format = nullptr;
-        hr = audio_client_->GetMixFormat(&format);
+        
+        // Get the system's native mix format
+        WAVEFORMATEX* mix_format = nullptr;
+        hr = audio_client_->GetMixFormat(&mix_format);
         if (FAILED(hr)) {
             audio_client_->Release();
             audio_client_ = nullptr;
             return false;
         }
         
-        // Initialize audio client
+        WAVEFORMATEX* target_format = nullptr;
+        bool use_stereo = false;
+        
+        // Check if system format is EXTENSIBLE
+        if (mix_format->wFormatTag == WAVE_FORMAT_EXTENSIBLE && mix_format->cbSize >= 22) {
+            WAVEFORMATEXTENSIBLE* ext_format = reinterpret_cast<WAVEFORMATEXTENSIBLE*>(mix_format);
+            
+            // Try to create a stereo version of the extensible format
+            WAVEFORMATEXTENSIBLE stereo_ext = *ext_format;
+            stereo_ext.Format.nChannels = 2;
+            stereo_ext.Format.nBlockAlign = (stereo_ext.Format.nChannels * stereo_ext.Format.wBitsPerSample) / 8;
+            stereo_ext.Format.nAvgBytesPerSec = stereo_ext.Format.nSamplesPerSec * stereo_ext.Format.nBlockAlign;
+            stereo_ext.dwChannelMask = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT;
+            
+            WAVEFORMATEX* closest_match = nullptr;
+            hr = audio_client_->IsFormatSupported(AUDCLNT_SHAREMODE_SHARED, 
+                                                   &stereo_ext.Format, &closest_match);
+            
+            if (hr == S_OK) {
+                // Stereo EXTENSIBLE is supported
+                std::cout << "[VirtualDevice] Stereo EXTENSIBLE format supported" << std::endl;
+                target_format = reinterpret_cast<WAVEFORMATEX*>(CoTaskMemAlloc(sizeof(WAVEFORMATEXTENSIBLE)));
+                memcpy(target_format, &stereo_ext, sizeof(WAVEFORMATEXTENSIBLE));
+                use_stereo = true;
+                system_sample_rate_ = stereo_ext.Format.nSamplesPerSec;
+                system_channels_ = 2;
+            } else if (hr == S_FALSE && closest_match) {
+                // Use the closest match suggested by Windows
+                std::cout << "[VirtualDevice] Using closest match format" << std::endl;
+                target_format = closest_match;
+                system_sample_rate_ = closest_match->nSamplesPerSec;
+                system_channels_ = closest_match->nChannels;
+            }
+            
+            if (hr != S_OK && hr != S_FALSE) {
+                if (closest_match) CoTaskMemFree(closest_match);
+            }
+        }
+        
+        // Fallback to system mix format if stereo not supported
+        if (!target_format) {
+            std::cout << "[VirtualDevice] Using system mix format" << std::endl;
+            target_format = mix_format;
+            system_sample_rate_ = mix_format->nSamplesPerSec;
+            system_channels_ = mix_format->nChannels;
+        }
+        
+        std::cout << "[VirtualDevice] Target format: " << system_sample_rate_ << "Hz, " 
+                  << system_channels_ << "ch" << std::endl;
+        
+        // Initialize with chosen format
         hr = audio_client_->Initialize(
             AUDCLNT_SHAREMODE_SHARED,
             0,
             10000000,  // 1 second buffer
             0,
-            format,
+            target_format,
             NULL
         );
         
-        CoTaskMemFree(format);
+        // Free allocated formats
+        if (use_stereo && target_format != mix_format) {
+            CoTaskMemFree(target_format);
+        }
+        CoTaskMemFree(mix_format);
         
         if (FAILED(hr)) {
+            std::cerr << "[VirtualDevice] Failed to initialize (error: 0x" 
+                      << std::hex << hr << ")" << std::endl;
             audio_client_->Release();
             audio_client_ = nullptr;
             return false;
         }
+        
+        std::cout << "[VirtualDevice] Successfully initialized @ " << system_sample_rate_ << "Hz, " 
+                  << system_channels_ << "ch" << std::endl;
         
         // Get buffer size
         hr = audio_client_->GetBufferSize(&buffer_frame_count_);
@@ -127,8 +224,6 @@ public:
             return false;
         }
         
-        std::cout << "[VirtualDevice] Initialized with VB-CABLE Input" << std::endl;
-        std::cout << "[VirtualDevice] Virtual microphone: CABLE Output" << std::endl;
         return true;
     }
     
@@ -158,7 +253,35 @@ public:
             return false;
         }
         
-        memcpy(buffer, data, frames * channels * sizeof(float));
+        float* float_buffer = reinterpret_cast<float*>(buffer);
+        
+        // If input channels match system channels, direct copy
+        if (channels == system_channels_) {
+            memcpy(buffer, data, frames * channels * sizeof(float));
+        } else if (channels == 1 && system_channels_ == 2) {
+            // Mono to stereo: duplicate to both L/R
+            for (size_t f = 0; f < frames; f++) {
+                float_buffer[f * 2 + 0] = data[f];  // Left
+                float_buffer[f * 2 + 1] = data[f];  // Right
+            }
+        } else if (channels == 1 && system_channels_ > 2) {
+            // Mono to multichannel (e.g., 8ch): only fill front L/R, silence others
+            for (size_t f = 0; f < frames; f++) {
+                float_buffer[f * system_channels_ + 0] = data[f];  // Front Left
+                float_buffer[f * system_channels_ + 1] = data[f];  // Front Right
+                // Silence all other channels
+                for (int ch = 2; ch < system_channels_; ch++) {
+                    float_buffer[f * system_channels_ + ch] = 0.0f;
+                }
+            }
+        } else {
+            // Generic upmix: cycle through input channels
+            for (size_t f = 0; f < frames; f++) {
+                for (int ch = 0; ch < system_channels_; ch++) {
+                    float_buffer[f * system_channels_ + ch] = data[f * channels + (ch % channels)];
+                }
+            }
+        }
         
         hr = render_client_->ReleaseBuffer(frames, 0);
         return SUCCEEDED(hr);
@@ -180,10 +303,16 @@ public:
         }
     }
     
+    int getSampleRate() const override {
+        return system_sample_rate_;
+    }
+    
 private:
     IAudioClient* audio_client_;
     IAudioRenderClient* render_client_;
     UINT32 buffer_frame_count_;
+    int system_sample_rate_;  // Actual system sample rate detected
+    int system_channels_;      // Actual system channel count
     
     IMMDevice* findDeviceByName(const std::string& target_name) {
         IMMDeviceEnumerator* enumerator = NULL;

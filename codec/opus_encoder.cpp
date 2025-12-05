@@ -17,11 +17,13 @@ moonmic_opus_encoder_t* moonmic_opus_encoder_create(uint32_t sample_rate, uint8_
         return NULL;
     }
     
-    int error;
+    int error;    
+    // Create Opus encoder with AUDIO application for better quality
+    // AUDIO mode is better than VOIP for music/general audio quality
     enc->encoder = opus_encoder_create(
         sample_rate,
         channels,
-        OPUS_APPLICATION_VOIP,  // Low latency mode
+        OPUS_APPLICATION_AUDIO,  // Changed from VOIP for better quality
         &error
     );
     
@@ -31,12 +33,21 @@ moonmic_opus_encoder_t* moonmic_opus_encoder_create(uint32_t sample_rate, uint8_
         return NULL;
     }
     
-    // Configure for low latency
+    // Configure encoder for maximum quality
+    // Set bitrate (96kbps for good voice quality)
     opus_encoder_ctl((OpusEncoder*)enc->encoder, OPUS_SET_BITRATE(bitrate));
-    opus_encoder_ctl((OpusEncoder*)enc->encoder, OPUS_SET_VBR(0));  // CBR for consistent latency
-    opus_encoder_ctl((OpusEncoder*)enc->encoder, OPUS_SET_COMPLEXITY(5));  // Balance quality/CPU
-    opus_encoder_ctl((OpusEncoder*)enc->encoder, OPUS_SET_SIGNAL(OPUS_SIGNAL_VOICE));
-    opus_encoder_ctl((OpusEncoder*)enc->encoder, OPUS_SET_DTX(0));  // Disable discontinuous transmission
+    
+    // Set maximum complexity (10 = best quality, slower encoding)
+    opus_encoder_ctl((OpusEncoder*)enc->encoder, OPUS_SET_COMPLEXITY(10));
+    
+    // Enable VBR (Variable Bit Rate) for better quality
+    opus_encoder_ctl((OpusEncoder*)enc->encoder, OPUS_SET_VBR(1));
+    
+    // Disable DTX (Discontinuous Transmission) - better for continuous audio
+    opus_encoder_ctl((OpusEncoder*)enc->encoder, OPUS_SET_DTX(0));
+    
+    MOONMIC_LOG("[opus_encoder] Created: %dHz, %dch, %dbps (AUDIO mode, complexity=10, VBR)",
+                sample_rate, channels, bitrate);
     
     enc->sample_rate = sample_rate;
     enc->channels = channels;
@@ -65,6 +76,16 @@ int moonmic_opus_encoder_encode(moonmic_opus_encoder_t* encoder, const float* pc
         return -1;
     }
     
+    // DEBUG: Log input details
+    static int encode_count = 0;
+    if (encode_count < 5) {
+        MOONMIC_LOG("[opus_encoder] Encoding frame #%d: %d samples, max_out=%d bytes",
+                   encode_count, frame_size, max_output_bytes);
+        MOONMIC_LOG("[opus_encoder] Input PCM samples[0-4]: %.4f %.4f %.4f %.4f %.4f",
+                   pcm[0], pcm[1], pcm[2], pcm[3], pcm[4]);
+        encode_count++;
+    }
+    
     int result = opus_encode_float(
         (OpusEncoder*)encoder->encoder,
         pcm,
@@ -76,6 +97,8 @@ int moonmic_opus_encoder_encode(moonmic_opus_encoder_t* encoder, const float* pc
     if (result < 0) {
         MOONMIC_LOG("[opus_encoder] ERROR: opus_encode_float failed: %d (frame_size=%d, max_out=%d)", 
             result, frame_size, max_output_bytes);
+    } else if (encode_count <= 5) {
+        MOONMIC_LOG("[opus_encoder] SUCCESS: Encoded %d bytes (frame_size=%d)", result, frame_size);
     }
     
     return result;

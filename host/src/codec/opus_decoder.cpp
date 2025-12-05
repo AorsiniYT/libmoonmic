@@ -38,6 +38,17 @@ bool OpusDecoder::init(int sample_rate, int channels) {
     return true;
 }
 
+bool OpusDecoder::reinit(int sample_rate, int channels) {
+    // Destroy existing decoder
+    if (decoder_) {
+        opus_decoder_destroy(static_cast<::OpusDecoder*>(decoder_));
+        decoder_ = nullptr;
+    }
+    
+    // Create new decoder
+    return init(sample_rate, channels);
+}
+
 int OpusDecoder::decode(const uint8_t* input, int input_size, float* output, int max_frames) {
     if (!decoder_) {
         return -1;

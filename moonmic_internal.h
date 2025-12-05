@@ -19,6 +19,19 @@ typedef struct moonmic_opus_encoder_t moonmic_opus_encoder_t;
 typedef struct udp_sender_t udp_sender_t;
 typedef struct audio_capture_t audio_capture_t;
 
+// Handshake packet structure (matches host)
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t magic;           // 0x4D4F4F4E ("MOON")
+    uint8_t version;          // 1
+    uint8_t pair_status;      // 0 or 1 from Sunshine validation
+    uint8_t uniqueid_len;     // Length of uniqueid (16)
+    char uniqueid[16];        // Client uniqueid
+    uint8_t devicename_len;   // Length of devicename
+    char devicename[64];      // Device name
+} moonmic_handshake_t;
+#pragma pack(pop)
+
 /**
  * @brief Internal client structure
  */
@@ -35,6 +48,11 @@ struct moonmic_client_t {
     bool active;
     bool running;
     
+    // Frame accumulation buffer for Opus (Vita gives 256, Opus needs 320)
+    float* accumulation_buffer;
+    size_t accumulated_samples;  // Current samples in buffer
+    size_t target_frame_size;    // Target frame size for Opus (320 @ 16kHz)
+    
     // Callbacks
     moonmic_error_callback_t error_callback;
     void* error_userdata;
@@ -43,6 +61,16 @@ struct moonmic_client_t {
     
     // Threading (platform-specific)
     void* thread_handle;
+    
+    // Handshake tracking
+    bool handshake_sent;
+    
+    // String storage (copies to prevent dangling pointers)
+    char uniqueid_storage[32];
+    char devicename_storage[128];
+    
+    // Heartbeat monitor
+    struct heartbeat_monitor_t* heartbeat_monitor;
 };
 
 /**
@@ -56,6 +84,12 @@ struct audio_capture_t {
      * @return true on success, false on failure
      */
     bool (*init)(audio_capture_t* self, uint32_t sample_rate, uint8_t channels);
+    
+    /**
+     * @brief Get native sample rate supported by this platform
+     * @return Native sample rate in Hz (e.g., 16000 for Vita)
+     */
+    uint32_t (*get_native_sample_rate)(audio_capture_t* self);
     
     /**
      * @brief Read audio samples
@@ -102,9 +136,11 @@ typedef struct __attribute__((packed)) {
     uint32_t sequence;   // Packet sequence number
     uint64_t timestamp;  // Microseconds since start
     uint32_t sample_rate; // Sample rate of encoded audio (e.g., 16000, 48000)
+                         // Bit 31: RAW mode flag (1 = uncompressed PCM, 0 = Opus)
 } moonmic_packet_header_t;
 
 #define MOONMIC_MAGIC 0x4D4D4943
+#define MOONMIC_RAW_FLAG 0x80000000  // Bit 31 set = RAW mode
 #define MOONMIC_VERSION "1.0.0"
 // Header size: magic(4) + sequence(4) + timestamp(8) + sample_rate(4) = 20 bytes
 // Use this constant instead of sizeof() due to compiler alignment issues on ARM

@@ -15,6 +15,7 @@ public:
     ~OpusDecoder();
     
     bool init(int sample_rate, int channels);
+    bool reinit(int sample_rate, int channels);  // Recreate decoder with new parameters
     int decode(const uint8_t* input, int input_size, float* output, int max_frames);
     
 private:
