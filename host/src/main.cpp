@@ -83,10 +83,6 @@ void renderGUI(GLFWwindow* window, AudioReceiver& receiver, SunshineIntegration&
     }
     ImGui::Separator();
     
-    // Status
-    ImGui::Text("Status: %s", receiver.isRunning() ? "Running" : "Stopped");
-    ImGui::Separator();
-    
 #ifdef _WIN32
     // VB-CABLE Driver Status
     ImGui::Text("VB-CABLE Driver");
@@ -424,26 +420,20 @@ void renderGUI(GLFWwindow* window, AudioReceiver& receiver, SunshineIntegration&
     
     ImGui::Separator();
     
-    // Controls
-    if (receiver.isRunning()) {
-        // Pause/Resume buttons (only when running)
-        if (receiver.isPaused()) {
-            if (ImGui::Button("Resume")) {
-                receiver.resume();
-            }
-        } else {
-            if (ImGui::Button("Pause")) {
-                receiver.pause();
-            }
+    // Pause/Resume controls
+    // Note: Receiver auto-starts on launch, no manual start/stop needed
+    if (receiver.isPaused()) {
+        if (ImGui::Button("Resume", ImVec2(120, 30))) {
+            receiver.resume();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Stop Receiver")) {
-            receiver.stop();
-        }
+        ImGui::TextColored(ImVec4(1, 0.8f, 0, 1), "Paused");
     } else {
-        if (ImGui::Button("Start Receiver")) {
-            receiver.start(config);
+        if (ImGui::Button("Pause", ImVec2(120, 30))) {
+            receiver.pause();
         }
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0, 1, 0, 1), "Active");
     }
     
     ImGui::SameLine();
@@ -671,9 +661,11 @@ int main_gui(int argc, char* argv[]) {
     // Hide console by default (show only in debug mode)
     DebugGUI::showConsole(g_debug_mode);
     
-    // Auto-start if configured
-    if (config.gui.show_on_startup) {
-        receiver.start(config);
+    // Auto-start receiver (always enabled - host is server mode)
+    std::cout << "[Main] Starting receiver..." << std::endl;
+    if (!receiver.start(config)) {
+        std::cerr << "[Main] Failed to start receiver" << std::endl;
+        // Continue anyway, user can retry with configuration changes
     }
     
     g_receiver = &receiver;

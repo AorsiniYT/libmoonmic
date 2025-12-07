@@ -150,6 +150,10 @@ void AudioReceiver::resume() {
     paused_ = false;
     stats_.is_paused = false;
     
+    // Reset packet timeout to prevent immediate disconnection
+    // When resuming, client needs time to send first packet
+    last_packet_time_ = std::chrono::steady_clock::now();
+    
     // Send START signal to client
     sendControlSignal(MOONMIC_CTRL_START);
     
@@ -576,6 +580,8 @@ AudioReceiver::Stats AudioReceiver::getStats() {
     stats_.is_paused = paused_;
     
     // Check for connection timeout (no packets received)
+    // IMPORTANT: Only check timeout when NOT paused
+    // When paused, client intentionally stops sending audio packets
     if (stats_.is_receiving && !paused_) {
         auto now = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_packet_time_).count();
@@ -584,7 +590,8 @@ AudioReceiver::Stats AudioReceiver::getStats() {
             stats_.is_receiving = false;
             
             // Also reset client validation if disconnected for too long
-            if (elapsed > CONNECTION_TIMEOUT_MS * 2) {
+            // But NOT if we're paused - paused client is still connected
+            if (elapsed > CONNECTION_TIMEOUT_MS * 2 && !paused_) {
                 if (client_validated_) {
                     std::cout << "[AudioReceiver] Client disconnected: " << client_devicename_ << std::endl;
                     client_validated_ = false;
