@@ -69,6 +69,26 @@ void ConnectionMonitor::stop() {
     std::cout << "[ConnectionMonitor] Stopped" << std::endl;
 }
 
+void ConnectionMonitor::sendPacket(const void* data, size_t size) {
+    if (!running_ || socket_fd_ == INVALID_SOCKET) {
+        std::cerr << "[ConnectionMonitor] Cannot send packet: not running" << std::endl;
+        return;
+    }
+    
+    struct sockaddr_in dest_addr;
+    memset(&dest_addr, 0, sizeof(dest_addr));
+    dest_addr.sin_family = AF_INET;
+    dest_addr.sin_port = htons(client_port_);
+    inet_pton(AF_INET, client_ip_.c_str(), &dest_addr.sin_addr);
+    
+    ssize_t sent = sendto(socket_fd_, (const char*)data, size, 0,
+                          (struct sockaddr*)&dest_addr, sizeof(dest_addr));
+    
+    if (sent != (ssize_t)size) {
+        std::cerr << "[ConnectionMonitor] Failed to send packet (" << sent << "/" << size << " bytes)" << std::endl;
+    }
+}
+
 void ConnectionMonitor::pingThreadFunc() {
     struct sockaddr_in dest_addr;
     memset(&dest_addr, 0, sizeof(dest_addr));

@@ -40,6 +40,13 @@ public:
      */
     bool isRunning() const { return running_; }
     
+    /**
+     * Send arbitrary packet to the client
+     * @param data Packet data to send
+     * @param size Size of the packet in bytes
+     */
+    void sendPacket(const void* data, size_t size);
+    
 private:
     void pingThreadFunc();
     

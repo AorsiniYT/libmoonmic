@@ -59,12 +59,9 @@ public:
      */
     std::vector<WebUIPairedClient> getPairedClients();
     
-    /**
-     * @brief Check if a specific client UUID is paired in Sunshine
-     * @param uuid Client UUID to check
-     * @return true if client is paired
-     */
-    bool isClientAuthorized(const std::string& uuid);
+    // NOTE: isClientAuthorized() removed - UUID verification not possible
+    // because Sunshine generates random UUID during pairing, ignoring client's uniqueid.
+    // Whitelist validation uses pair_status from handshake instead.
     
     /**
      * @brief Reload client list from Sunshine

@@ -304,46 +304,55 @@ void AnimatedGraph::draw(const ImVec2& size) {
     }
     
     // Draw graph line
-    if (display_data_.size() > 1) {
-        float x_step = size.x / (display_data_.size() - 1);
+    if (display_data_.size() > 1 && max_range_ > min_range_) {
+        // Calculate x step - data fills left to right, newest on right
+        float data_count = static_cast<float>(display_data_.size());
+        float x_step = size.x / (data_count - 1);
         
-        // Fill area under curve
-        std::vector<ImVec2> fill_points;
-        fill_points.push_back(ImVec2(pos.x, pos.y + size.y));
-        
-        for (size_t i = 0; i < display_data_.size(); i++) {
-            float normalized = (display_data_[i] - min_range_) / (max_range_ - min_range_);
-            normalized = std::clamp(normalized, 0.0f, 1.0f);
-            float x = pos.x + i * x_step;
-            float y = pos.y + size.y * (1.0f - normalized);
-            fill_points.push_back(ImVec2(x, y));
-        }
-        fill_points.push_back(ImVec2(pos.x + size.x, pos.y + size.y));
-        
-        // Draw filled area
         ImU32 fill_color = ImGui::ColorConvertFloat4ToU32(
             ImVec4(color_.x, color_.y, color_.z, 0.2f));
-        draw_list->AddConvexPolyFilled(fill_points.data(), fill_points.size(), fill_color);
-        
-        // Draw line
         ImU32 line_color = ImGui::ColorConvertFloat4ToU32(color_);
-        for (size_t i = 1; i < display_data_.size(); i++) {
-            float normalized1 = (display_data_[i-1] - min_range_) / (max_range_ - min_range_);
-            float normalized2 = (display_data_[i] - min_range_) / (max_range_ - min_range_);
+        
+        // Draw filled area using individual triangles (works correctly for any shape)
+        float bottom_y = pos.y + size.y;
+        
+        for (size_t i = 0; i < display_data_.size() - 1; i++) {
+            float normalized1 = (display_data_[i] - min_range_) / (max_range_ - min_range_);
+            float normalized2 = (display_data_[i + 1] - min_range_) / (max_range_ - min_range_);
             normalized1 = std::clamp(normalized1, 0.0f, 1.0f);
             normalized2 = std::clamp(normalized2, 0.0f, 1.0f);
             
-            ImVec2 p1(pos.x + (i-1) * x_step, pos.y + size.y * (1.0f - normalized1));
-            ImVec2 p2(pos.x + i * x_step, pos.y + size.y * (1.0f - normalized2));
+            float x1 = pos.x + i * x_step;
+            float x2 = pos.x + (i + 1) * x_step;
+            float y1 = pos.y + size.y * (1.0f - normalized1);
+            float y2 = pos.y + size.y * (1.0f - normalized2);
             
-            draw_list->AddLine(p1, p2, line_color, 2.0f);
+            // Draw two triangles to form a quad (trapezoid) for this segment
+            // Triangle 1: top-left, top-right, bottom-right
+            draw_list->AddTriangleFilled(
+                ImVec2(x1, y1),
+                ImVec2(x2, y2),
+                ImVec2(x2, bottom_y),
+                fill_color
+            );
+            // Triangle 2: top-left, bottom-right, bottom-left
+            draw_list->AddTriangleFilled(
+                ImVec2(x1, y1),
+                ImVec2(x2, bottom_y),
+                ImVec2(x1, bottom_y),
+                fill_color
+            );
+            
+            // Draw line segment
+            draw_list->AddLine(ImVec2(x1, y1), ImVec2(x2, y2), line_color, 2.0f);
         }
         
-        // Draw current value dot
+        // Draw current value dot at the last data point
         if (!display_data_.empty()) {
+            float last_x = pos.x + (display_data_.size() - 1) * x_step;
             float last_normalized = (display_data_.back() - min_range_) / (max_range_ - min_range_);
             last_normalized = std::clamp(last_normalized, 0.0f, 1.0f);
-            ImVec2 dot_pos(pos.x + size.x, pos.y + size.y * (1.0f - last_normalized));
+            ImVec2 dot_pos(last_x, pos.y + size.y * (1.0f - last_normalized));
             draw_list->AddCircleFilled(dot_pos, 4.0f, line_color);
             draw_list->AddCircle(dot_pos, 6.0f, IM_COL32(255, 255, 255, 100));
         }
@@ -628,17 +637,44 @@ void DebugGUI::update(float delta_time, const AudioStats& stats, bool connected,
     }
 }
 
-void DebugGUI::drawStatusIndicators(bool connected, bool receiving) {
+void DebugGUI::drawStatusIndicators(bool connected, bool receiving, bool paused) {
     ImGui::BeginGroup();
     
-    // Connection LED
+    // Connection LED (green = connected, red = disconnected)
+    if (connected) {
+        connection_led_.setState(AnimatedLED::State::CONNECTED);
+    } else {
+        connection_led_.setState(AnimatedLED::State::OFF);
+    }
     connection_led_.draw("Connection", 10.0f);
     
-    // Data LED
-    data_led_.draw("Data", 10.0f);
+    // Data LED (green = receiving, yellow = paused, red = not receiving)
+    if (paused) {
+        // Yellow for paused state - draw custom
+        ImDrawList* draw_list = ImGui::GetWindowDrawList();
+        ImVec2 pos = ImGui::GetCursorScreenPos();
+        float radius = 10.0f;
+        
+        // Yellow LED
+        ImU32 yellow = IM_COL32(255, 200, 0, 255);
+        ImU32 yellow_glow = IM_COL32(255, 200, 0, 80);
+        draw_list->AddCircleFilled(ImVec2(pos.x + radius, pos.y + radius), radius + 2, yellow_glow);
+        draw_list->AddCircleFilled(ImVec2(pos.x + radius, pos.y + radius), radius, yellow);
+        
+        ImGui::Dummy(ImVec2(radius * 2 + 4, radius * 2));
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "PAUSED");
+    } else {
+        if (receiving) {
+            data_led_.setState(AnimatedLED::State::ACTIVE);
+        } else {
+            data_led_.setState(AnimatedLED::State::OFF);
+        }
+        data_led_.draw("Data", 10.0f);
+    }
     
-    // Data flow animation
-    if (connected) {
+    // Data flow animation (only when receiving, not paused)
+    if (connected && receiving && !paused) {
         ImGui::Text("Stream:");
         ImGui::SameLine();
         data_flow_.draw(120.0f, 16.0f);

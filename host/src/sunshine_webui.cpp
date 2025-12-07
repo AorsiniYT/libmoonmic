@@ -282,32 +282,9 @@ std::vector<WebUIPairedClient> SunshineWebUI::getPairedClients() {
     return paired_clients_;
 }
 
-bool SunshineWebUI::isClientAuthorized(const std::string& uuid) {
-    // If whitelist is disabled, allow all clients
-    if (!config_.security.enable_whitelist) {
-        return true;
-    }
-    
-    // If whitelist enabled but not logged in, DENY for security
-    if (!isLoggedIn()) {
-        std::cerr << "[SunshineWebUI] ERROR: Whitelist enabled but not logged in - DENYING client" << std::endl;
-        std::cerr << "[SunshineWebUI] Login to Sunshine Web UI to enable security validation" << std::endl;
-        return false;
-    }
-    
-    // Check if client UUID is in paired list
-    for (const auto& client : paired_clients_) {
-        if (client.uuid == uuid) {
-            std::cout << "[SunshineWebUI] Client authorized: " << client.name 
-                      << " (" << uuid << ")" << std::endl;
-            return true;
-        }
-    }
-    
-    std::cerr << "[SunshineWebUI] Client NOT authorized: " << uuid << std::endl;
-    std::cerr << "[SunshineWebUI] This client is not paired in Sunshine" << std::endl;
-    return false;
-}
+// NOTE: isClientAuthorized() removed - UUID verification not possible
+// because Sunshine generates random UUID during pairing (nvhttp.cpp line 274),
+// ignoring client's uniqueid. Whitelist validation uses pair_status instead.
 
 bool SunshineWebUI::refreshClientList() {
     if (!isLoggedIn()) {

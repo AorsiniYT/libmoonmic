@@ -80,8 +80,70 @@ static void* moonmic_worker_thread(void* arg) {
     
     MOONMIC_LOG("[moonmic_worker] Thread started - beginning capture loop");
     int loop_count = 0;
+    bool was_connected = true;  // Track previous connection state for handshake re-send
+    uint64_t last_probe_time = 0;  // For periodic probing when disconnected
+    static int probe_count = 0;   // Track probe attempts
+    
+    // Vita-optimized probe interval: 3 seconds (balanced between responsiveness and battery)
+    const uint64_t PROBE_INTERVAL_MS = 3000;
     
     while (client->running) {
+        // Check heartbeat status - if host disconnected, wait and resend handshake when reconnected
+        if (client->heartbeat_monitor) {
+            bool is_connected = heartbeat_monitor_is_connected(client->heartbeat_monitor);
+            
+            if (!is_connected && was_connected) {
+                // Just disconnected - enter suspension mode
+                MOONMIC_LOG("[moonmic_worker] Host disconnected - entering suspension mode");
+                MOONMIC_LOG("[moonmic_worker] Probing for host every 3 seconds...");
+                was_connected = false;
+                last_probe_time = 0;  // Force immediate probe
+                probe_count = 0;
+            }
+            
+            if (!is_connected) {
+                // In suspension mode - periodically send handshake probe to detect host
+                uint64_t now = moonmic_get_timestamp_us() / 1000;  // Convert to ms
+                
+                if (now - last_probe_time >= PROBE_INTERVAL_MS) {
+                    probe_count++;
+                    // Send handshake as a probe to detect if host is available
+                    udp_sender_send(client->sender, &handshake, sizeof(handshake));
+                    MOONMIC_LOG("[moonmic_worker] Probe #%d: waiting for host...", probe_count);
+                    last_probe_time = now;
+                }
+                
+                // Sleep 200ms - good balance for Vita (not too aggressive, reasonably responsive)
+#ifdef _WIN32
+                Sleep(200);
+#else
+                usleep(200000);  // 200ms
+#endif
+                continue;
+            }
+            
+            if (is_connected && !was_connected) {
+                // Just reconnected - host is back online!
+                MOONMIC_LOG("[moonmic_worker] Host is back online! Resuming transmission...");
+                if (udp_sender_send(client->sender, &handshake, sizeof(handshake))) {
+                    MOONMIC_LOG("[moonmic_worker] Handshake sent - resuming audio");
+                }
+                was_connected = true;
+                probe_count = 0;
+            }
+            
+            // Check if host has paused transmission (STOP signal received)
+            if (is_connected && heartbeat_monitor_is_paused(client->heartbeat_monitor)) {
+                // Host is connected but has sent STOP signal - pause audio transmission
+#ifdef _WIN32
+                Sleep(100);  // Sleep 100ms
+#else
+                usleep(100000);  // Sleep 100ms
+#endif
+                continue;  // Skip audio capture and transmission
+            }
+        }
+        
         // Capture audio
         int frames_read = client->capture->read(client->capture, pcm_buffer, frame_size);
         

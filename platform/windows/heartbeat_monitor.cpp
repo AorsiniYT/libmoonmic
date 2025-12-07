@@ -14,6 +14,8 @@
 
 #define PING_MAGIC 0x50494E47  // "PING"
 #define PING_TIMEOUT_MS 3000   // 3 seconds
+#define CTRL_STOP_MAGIC 0x53544F50  // "STOP"
+#define CTRL_START_MAGIC 0x53545254  // "STRT"
 
 #pragma pack(push, 1)
 struct ping_packet {
@@ -28,6 +30,7 @@ struct heartbeat_monitor_t {
     volatile moonmic_connection_status_t status;
     volatile ULONGLONG last_ping_time;
     HANDLE thread_handle;
+    volatile LONG paused;  // 1 if host sent STOP, 0 if host sent START
 };
 
 // Get time in milliseconds
@@ -38,16 +41,29 @@ static ULONGLONG get_time_ms() {
 // Monitor thread function
 static DWORD WINAPI monitor_thread_func(LPVOID param) {
     heartbeat_monitor_t* monitor = (heartbeat_monitor_t*)param;
-    ping_packet ping;
+    uint8_t buffer[32];
     
     while (InterlockedCompareExchange(&monitor->running, 0, 0)) {
         // Receive with timeout
-        int received = recv(monitor->socket, (char*)&ping, sizeof(ping), 0);
+        int received = recv(monitor->socket, (char*)buffer, sizeof(buffer), 0);
         
-        if (received == sizeof(ping) && ping.magic == PING_MAGIC) {
-            // Valid PING received
-            monitor->last_ping_time = get_time_ms();
-            monitor->status = MOONMIC_CONNECTED;
+        if (received >= 4) {  // At least magic number
+            uint32_t magic;
+            memcpy(&magic, buffer, sizeof(magic));
+            
+            if (magic == PING_MAGIC && received == sizeof(ping_packet)) {
+                // Valid PING received
+                monitor->last_ping_time = get_time_ms();
+                monitor->status = MOONMIC_CONNECTED;
+            }
+            else if (magic == CTRL_STOP_MAGIC && received == 8) {
+                // STOP signal from host - pause transmission
+                InterlockedExchange(&monitor->paused, 1);
+            }
+            else if (magic == CTRL_START_MAGIC && received == 8) {
+                // START signal from host - resume transmission
+                InterlockedExchange(&monitor->paused, 0);
+            }
         }
         
         // Check for timeout
@@ -106,6 +122,7 @@ heartbeat_monitor_t* heartbeat_monitor_create(uint16_t port) {
     monitor->status = MOONMIC_DISCONNECTED;
     monitor->last_ping_time = 0;
     InterlockedExchange(&monitor->running, 1);
+    InterlockedExchange(&monitor->paused, 0);  // Start unpaused
     
     // Create monitor thread
     monitor->thread_handle = CreateThread(nullptr, 0, monitor_thread_func, monitor, 0, nullptr);
@@ -144,6 +161,13 @@ moonmic_connection_status_t heartbeat_monitor_get_status(heartbeat_monitor_t* mo
 
 bool heartbeat_monitor_is_connected(heartbeat_monitor_t* monitor) {
     return heartbeat_monitor_get_status(monitor) == MOONMIC_CONNECTED;
+}
+
+bool heartbeat_monitor_is_paused(heartbeat_monitor_t* monitor) {
+    if (!monitor) {
+        return false;
+    }
+    return InterlockedCompareExchange(&monitor->paused, 0, 0) != 0;
 }
 
 } // extern "C"

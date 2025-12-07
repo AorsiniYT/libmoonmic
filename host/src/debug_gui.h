@@ -180,7 +180,8 @@ public:
     static bool isConsoleVisible();
     
     // Draw simple status indicators for main UI
-    void drawStatusIndicators(bool connected, bool receiving);
+    // connected: heartbeat alive, receiving: audio data flowing, paused: host paused
+    void drawStatusIndicators(bool connected, bool receiving, bool paused = false);
     
 private:
     void renderContent();

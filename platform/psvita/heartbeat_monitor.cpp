@@ -13,6 +13,8 @@
 
 #define PING_MAGIC 0x50494E47  // "PING"
 #define PING_TIMEOUT_MS 3000   // 3 seconds
+#define CTRL_STOP_MAGIC 0x53544F50  // "STOP"
+#define CTRL_START_MAGIC 0x53545254  // "STRT"
 
 #pragma pack(push, 1)
 struct ping_packet {
@@ -27,6 +29,7 @@ struct heartbeat_monitor_t {
     volatile moonmic_connection_status_t status;
     volatile uint64_t last_ping_time;
     SceUID thread_id;
+    volatile int paused;  // 1 if host sent STOP, 0 if host sent START
 };
 
 // Get time in milliseconds
@@ -56,18 +59,28 @@ static int monitor_thread_func(SceSize args, void* argp) {
     
     while (monitor->running) {
         // Receive with timeout
-        int received = sceNetRecv(monitor->socket, buffer, sizeof(ping_packet), 0);
+        int received = sceNetRecv(monitor->socket, buffer, sizeof(buffer), 0);
         
-        if (received == sizeof(ping_packet)) {
+        if (received >= 4) {  // At least magic number
             // Use memcpy to safely read potentially unaligned data
             uint32_t magic;
             memcpy(&magic, buffer, sizeof(magic));
             
-            if (magic == PING_MAGIC) {
+            if (magic == PING_MAGIC && received == sizeof(ping_packet)) {
                 // Valid PING received
                 monitor->last_ping_time = get_time_ms();
                 monitor->status = MOONMIC_CONNECTED;
                 // printf("[heartbeat_mon] PING received\n"); // Uncomment for verbose debug
+            }
+            else if (magic == CTRL_STOP_MAGIC && received == 8) {
+                // STOP signal from host - pause transmission
+                monitor->paused = 1;
+                printf("[heartbeat_mon] Received STOP signal - client paused\n");
+            }
+            else if (magic == CTRL_START_MAGIC && received == 8) {
+                // START signal from host - resume transmission
+                monitor->paused = 0;
+                printf("[heartbeat_mon] Received START signal - client resumed\n");
             }
         }
         
@@ -123,6 +136,7 @@ heartbeat_monitor_t* heartbeat_monitor_create(uint16_t port) {
     monitor->status = MOONMIC_DISCONNECTED;
     monitor->last_ping_time = 0;
     monitor->running = 1;
+    monitor->paused = 0;  // Start unpaused
     
     // Create monitor thread
     monitor->thread_id = sceKernelCreateThread("heartbeat_mon", monitor_thread_func, 
@@ -160,6 +174,13 @@ moonmic_connection_status_t heartbeat_monitor_get_status(heartbeat_monitor_t* mo
 
 bool heartbeat_monitor_is_connected(heartbeat_monitor_t* monitor) {
     return heartbeat_monitor_get_status(monitor) == MOONMIC_CONNECTED;
+}
+
+bool heartbeat_monitor_is_paused(heartbeat_monitor_t* monitor) {
+    if (!monitor) {
+        return false;
+    }
+    return monitor->paused != 0;
 }
 
 } // extern "C"

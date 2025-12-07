@@ -303,11 +303,12 @@ void renderGUI(GLFWwindow* window, AudioReceiver& receiver, SunshineIntegration&
     
     // Status Indicators (simplified - LEDs instead of detailed stats)
     auto stats = receiver.getStats();
-    bool connected = !stats.last_sender_ip.empty();
+    bool connected = stats.is_connected;
     bool receiving = stats.is_receiving;
+    bool paused = stats.is_paused;
     
     ImGui::Text("Status");
-    debug_gui.drawStatusIndicators(connected, receiving);
+    debug_gui.drawStatusIndicators(connected, receiving, paused);
     
     // Show client info if connected
     if (connected) {
@@ -382,6 +383,11 @@ void renderGUI(GLFWwindow* window, AudioReceiver& receiver, SunshineIntegration&
     bool prev_speaker = config.audio.use_speaker_mode;
     if (ImGui::Checkbox("Speaker Mode (Debug)", &config.audio.use_speaker_mode)) {
         if (prev_speaker != config.audio.use_speaker_mode) {
+            // Hot-swap audio output if receiver is running
+            if (receiver.isRunning()) {
+                receiver.switchAudioOutput(config.audio.use_speaker_mode);
+            }
+            
             std::string config_path = Config::getDefaultConfigPath();
             if (config.save(config_path)) {
                 std::cout << "[Config] Auto-saved speaker mode: " 
@@ -420,6 +426,17 @@ void renderGUI(GLFWwindow* window, AudioReceiver& receiver, SunshineIntegration&
     
     // Controls
     if (receiver.isRunning()) {
+        // Pause/Resume buttons (only when running)
+        if (receiver.isPaused()) {
+            if (ImGui::Button("Resume")) {
+                receiver.resume();
+            }
+        } else {
+            if (ImGui::Button("Pause")) {
+                receiver.pause();
+            }
+        }
+        ImGui::SameLine();
         if (ImGui::Button("Stop Receiver")) {
             receiver.stop();
         }

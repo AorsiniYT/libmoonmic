@@ -146,6 +146,26 @@ typedef struct __attribute__((packed)) {
 // Use this constant instead of sizeof() due to compiler alignment issues on ARM
 #define MOONMIC_HEADER_SIZE 20
 
+// Control signal magic numbers (host -> client)
+#define MOONMIC_CTRL_STOP  0x53544F50  // "STOP" - host is pausing, stop transmitting
+#define MOONMIC_CTRL_START 0x53545254  // "STRT" - host is resuming, start transmitting
+
+// Control packet structure (8 bytes)
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t magic;      // MOONMIC_CTRL_STOP or MOONMIC_CTRL_START
+    uint32_t reserved;   // Reserved for future use
+} moonmic_control_packet_t;
+#pragma pack(pop)
+
+// Receiver state enum
+typedef enum {
+    MOONMIC_STATE_STOPPED = 0,     // Not running
+    MOONMIC_STATE_RUNNING = 1,     // Running and receiving
+    MOONMIC_STATE_PAUSED = 2,      // Connected but not receiving (host paused)
+    MOONMIC_STATE_SUSPENSION = 3   // Waiting for host (probing)
+} moonmic_receiver_state_t;
+
 // Platform-specific factory functions
 #ifdef __vita__
 audio_capture_t* audio_capture_create_vita(void);

@@ -57,6 +57,13 @@ moonmic_connection_status_t heartbeat_monitor_get_status(heartbeat_monitor_t* mo
  */
 bool heartbeat_monitor_is_connected(heartbeat_monitor_t* monitor);
 
+/**
+ * @brief Check if host has paused transmission (STOP signal received)
+ * @param monitor Monitor instance
+ * @return true if paused, false otherwise
+ */
+bool heartbeat_monitor_is_paused(heartbeat_monitor_t* monitor);
+
 #ifdef __cplusplus
 }
 #endif

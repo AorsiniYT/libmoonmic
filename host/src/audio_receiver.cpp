@@ -19,6 +19,7 @@ AudioReceiver::AudioReceiver()
     , virtual_device_(nullptr)
     , connection_monitor_(nullptr)
     , running_(false)
+    , paused_(false)
     , client_validated_(false)
     , detected_stream_rate_(0)
     , system_sample_rate_(0)  // Will be set after VirtualDevice init
@@ -131,6 +132,104 @@ void AudioReceiver::stop() {
     std::cout << "[AudioReceiver] Stopped" << std::endl;
 }
 
+void AudioReceiver::pause() {
+    if (!running_ || paused_) return;
+    
+    paused_ = true;
+    stats_.is_paused = true;
+    
+    // Send STOP signal to client
+    sendControlSignal(MOONMIC_CTRL_STOP);
+    
+    std::cout << "[AudioReceiver] Paused - sent STOP to client" << std::endl;
+}
+
+void AudioReceiver::resume() {
+    if (!running_ || !paused_) return;
+    
+    paused_ = false;
+    stats_.is_paused = false;
+    
+    // Send START signal to client
+    sendControlSignal(MOONMIC_CTRL_START);
+    
+    std::cout << "[AudioReceiver] Resumed - sent START to client" << std::endl;
+}
+
+void AudioReceiver::sendControlSignal(uint32_t signal_magic) {
+    if (!connection_monitor_ || last_validated_ip_.empty()) {
+        std::cerr << "[AudioReceiver] Cannot send control signal: no validated client" << std::endl;
+        return;
+    }
+    
+    if (!connection_monitor_->isRunning()) {
+        std::cerr << "[AudioReceiver] Cannot send control signal: connection monitor not running" << std::endl;
+        return;
+    }
+    
+    // Create control packet
+    moonmic_control_packet_t packet;
+    packet.magic = signal_magic;
+    packet.reserved = 0;
+    
+    // Send to client using connection monitor's socket
+    connection_monitor_->sendPacket(&packet, sizeof(packet));
+    
+    const char* signal_name = (signal_magic == MOONMIC_CTRL_STOP) ? "STOP" : 
+                              (signal_magic == MOONMIC_CTRL_START) ? "START" : "UNKNOWN";
+    
+    std::cout << "[AudioReceiver] Sent control signal: " << signal_name 
+              << " to " << last_validated_ip_ << std::endl;
+}
+
+bool AudioReceiver::switchAudioOutput(bool use_speakers) {
+    if (!running_) return false;
+    
+    std::cout << "[AudioReceiver] Hot-swapping audio to " 
+              << (use_speakers ? "speakers" : "VB-Cable") << std::endl;
+    
+    // Pause briefly during switch
+    bool was_paused = paused_;
+    if (!was_paused) pause();
+    
+    // Close current virtual device
+    if (virtual_device_) {
+        virtual_device_->close();
+        virtual_device_.reset();
+    }
+    
+    // Destroy old resampler (new rates may be needed)
+    if (resampler_) {
+        speex_resampler_destroy(resampler_);
+        resampler_ = nullptr;
+    }
+    detected_stream_rate_ = 0;
+    rate_logged_ = false;
+    
+    // Update config
+    config_.audio.use_speaker_mode = use_speakers;
+    
+    // Create new virtual device using factory
+    std::string output_device = use_speakers ? "" : config_.audio.virtual_device_name;
+    std::string output_mode = use_speakers ? "speakers (debug)" : "VB-Cable (microphone)";
+    
+    virtual_device_ = VirtualDevice::create();
+    if (!virtual_device_->init(output_device, 48000, config_.audio.channels)) {
+        std::cerr << "[AudioReceiver] Failed to initialize new audio device" << std::endl;
+        if (!was_paused) resume();
+        return false;
+    }
+    
+    system_sample_rate_ = virtual_device_->getSampleRate();
+    std::cout << "[AudioReceiver] Audio output: " << output_mode 
+              << " @ " << system_sample_rate_ << "Hz" << std::endl;
+    
+    // Resume if we weren't paused before
+    if (!was_paused) resume();
+    
+    return true;
+}
+
 bool AudioReceiver::isClientAllowed(const std::string& ip) {
     // If whitelist is disabled, allow all
     if (!config_.security.enable_whitelist) {
@@ -152,6 +251,7 @@ void AudioReceiver::onPacketReceived(const uint8_t* data, size_t size, const std
     stats_.bytes_received += size;
     stats_.last_sender_ip = sender_ip;
     stats_.is_receiving = true;
+    last_packet_time_ = std::chrono::steady_clock::now();  // Update timestamp for timeout detection
     
     // First packet must be handshake for validation
     if (!client_validated_) {
@@ -183,6 +283,13 @@ void AudioReceiver::onPacketReceived(const uint8_t* data, size_t size, const std
     // Read magic (bytes 0-3, little-endian)
     uint32_t magic = ((uint32_t)data[0] << 0) | ((uint32_t)data[1] << 8) | 
                      ((uint32_t)data[2] << 16) | ((uint32_t)data[3] << 24);
+    
+    // Validate magic - must be MMIC for audio packets
+    // (MOON=0x4D4F4F4E is handshake, MMIC=0x4D4D4943 is audio)
+    if (magic != MOONMIC_MAGIC) {
+        // Not an audio packet, ignore (could be handshake probe)
+        return;
+    }
     
     // Read sequence (bytes 4-7, little-endian)  
     uint32_t sequence = ((uint32_t)data[4] << 0) | ((uint32_t)data[5] << 8) |
@@ -430,13 +537,68 @@ bool AudioReceiver::validateHandshake(const uint8_t* data, size_t size, const st
         return true;
     }
     
+    // =========================================================================
+    // WHITELIST VALIDATION - Using pair_status from client handshake
+    // =========================================================================
+    // 
+    // NOTE: UUID verification is NOT possible because Sunshine generates a
+    // random UUID for each paired client during the pairing process, ignoring
+    // the uniqueid that Moonlight clients send (e.g., "0123456789ABCDEF").
+    // 
+    // See Sunshine source: nvhttp.cpp line 274:
+    //   add_authorized_client() { named_cert.uuid = uuid_util::uuid_t::generate().string(); }
+    // 
+    // This means:
+    //   - Client sends uniqueid="0123456789ABCDEF" during pairing
+    //   - Sunshine stores a DIFFERENT random UUID (e.g., "A1B2C3D4-E5F6-...")
+    //   - The /api/clients/list endpoint returns Sunshine's generated UUID
+    //   - UUIDs will NEVER match
+    //
+    // SECURITY: The pair_status is validated by the CLIENT against Sunshine
+    // via HTTPS with TLS certificate verification BEFORE sending the handshake.
+    // If PairStatus=1, it means Sunshine confirmed the client is paired.
+    // =========================================================================
+    
     if (hs->pair_status != 1) {
-        std::cerr << "[AudioReceiver] DENY: Client not paired - " << client_devicename_ << std::endl;
+        std::cerr << "[AudioReceiver] DENY: Client '" << client_devicename_ 
+                  << "' not validated by Sunshine (pair_status=" << (int)hs->pair_status << ")" << std::endl;
+        std::cerr << "[AudioReceiver] Ensure client is paired with Sunshine host" << std::endl;
         return false;
     }
     
-    std::cout << "[AudioReceiver] Client validated: " << client_devicename_ << std::endl;
+    std::cout << "[AudioReceiver] Client validated (pair_status=1): " << client_devicename_ << std::endl;
     return true;
+}
+
+AudioReceiver::Stats AudioReceiver::getStats() {
+    // Update connection status
+    stats_.is_connected = client_validated_;
+    stats_.is_paused = paused_;
+    
+    // Check for connection timeout (no packets received)
+    if (stats_.is_receiving && !paused_) {
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_packet_time_).count();
+        
+        if (elapsed > CONNECTION_TIMEOUT_MS) {
+            stats_.is_receiving = false;
+            
+            // Also reset client validation if disconnected for too long
+            if (elapsed > CONNECTION_TIMEOUT_MS * 2) {
+                if (client_validated_) {
+                    std::cout << "[AudioReceiver] Client disconnected: " << client_devicename_ << std::endl;
+                    client_validated_ = false;
+                    stats_.is_connected = false;
+                    
+                    // Stop heartbeat monitor
+                    if (connection_monitor_) {
+                        connection_monitor_->stop();
+                    }
+                }
+            }
+        }
+    }
+    return stats_;
 }
 
 } // namespace moonmic
