@@ -158,11 +158,12 @@ void UDPReceiver::receiveLoop() {
         // Get sender IP
         char sender_ip[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &sender_addr.sin_addr, sender_ip, INET_ADDRSTRLEN);
+        uint16_t sender_port = ntohs(sender_addr.sin_port);
         
         // Pass COMPLETE packet (including header) to callback
         // audio_receiver.cpp will parse the header manually
         if (packet_callback_) {
-            packet_callback_(buffer, received, std::string(sender_ip));
+            packet_callback_(buffer, received, std::string(sender_ip), sender_port);
         }
     }
 }

@@ -13,6 +13,8 @@
 // For Base64 encoding
 #include <sstream>
 #include <iomanip>
+#include <algorithm>
+#include <exception>
 
 extern bool g_debug_mode;  // From main.cpp
 
@@ -203,6 +205,18 @@ std::string SunshineWebUI::makeAuthenticatedRequest(
     return response_string;
 }
 
+bool SunshineWebUI::restartSunshine() {
+    // Uses authenticated POST /api/restart
+    std::string response = makeAuthenticatedRequest("/api/restart", "POST", "{}");
+    if (response.empty()) {
+        std::cerr << "[SunshineWebUI] Restart request returned empty response (Sunshine likely restarted connection)" << std::endl;
+        // Many builds drop the connection while restarting; treat as best-effort success
+        return true;
+    }
+    std::cout << "[SunshineWebUI] Sunshine restart requested" << std::endl;
+    return true;
+}
+
 bool SunshineWebUI::login(const std::string& username, const std::string& password) {
     std::cout << "[SunshineWebUI] Attempting login for user: " << username << std::endl;
     
@@ -336,6 +350,184 @@ void SunshineWebUI::loadCredentials() {
     if (isLoggedIn()) {
         std::cout << "[SunshineWebUI] Loaded credentials for: " 
                   << config_.sunshine.webui_username << std::endl;
+    }
+}
+
+bool SunshineWebUI::setDisplayResolution(uint16_t target_width, uint16_t target_height) {
+    if (!isLoggedIn()) {
+        std::cerr << "[SunshineWebUI] Not logged in - cannot set resolution" << std::endl;
+        return false;
+    }
+    
+    // Build target resolution string
+    std::string target_res = std::to_string(target_width) + "x" + std::to_string(target_height);
+    std::cout << "[SunshineWebUI] Verifying display resolution: 960x544 -> " << target_res << std::endl;
+
+    // 1. Get current config to check if we actually need to change anything
+    std::string current_config_str = makeAuthenticatedRequest("/api/config");
+    if (current_config_str.empty()) {
+        std::cerr << "[SunshineWebUI] Failed to get current config for verification. Aborting update to prevent restart loops." << std::endl;
+        return false;
+    } else {
+        try {
+            nlohmann::json current = nlohmann::json::parse(current_config_str);
+            
+            // Navigate to dd_mode_remapping
+            // Sunshine API returns flat key-value pairs where values are strings
+            if (current.contains("dd_mode_remapping")) {
+                std::string remapping_str = current["dd_mode_remapping"];
+                // The value itself is a JSON string, need to parse again
+                nlohmann::json remapping = nlohmann::json::parse(remapping_str);
+                
+                if (remapping.contains("mixed") && remapping["mixed"].is_array()) {
+                    for (const auto& entry : remapping["mixed"]) {
+                        // Check if we have an entry for 960x544
+                        if (entry.value("requested_resolution", "") == "960x544") {
+                            // Check if it matches our target
+                            if (entry.value("final_resolution", "") == target_res) {
+                                std::cout << "[SunshineWebUI] Resolution already set to " << target_res << " - Skipping update/restart" << std::endl;
+                                return true; // Already correct!
+                            } else {
+                                std::cout << "[SunshineWebUI] Found existing mapping but different resolution: " 
+                                          << entry.value("final_resolution", "") << " (wanted " << target_res << ")" << std::endl;
+                                // Need to update
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "[SunshineWebUI] Error parsing current config: " << e.what() << std::endl;
+            // Proceed with update on error
+        }
+    }
+    
+    // 2. Need to update - Build new config
+    nlohmann::json remapping_json;
+    remapping_json["mixed"] = nlohmann::json::array();
+    remapping_json["resolution_only"] = nlohmann::json::array();
+    remapping_json["refresh_rate_only"] = nlohmann::json::array();
+    
+    // Add our remapping entry to "mixed" array
+    nlohmann::json entry;
+    entry["requested_resolution"] = "960x544";
+    entry["requested_fps"] = "";
+    entry["final_resolution"] = target_res;
+    entry["final_refresh_rate"] = "60";
+    remapping_json["mixed"].push_back(entry);
+    
+    // Convert to string for Sunshine config format
+    std::string remapping_str = remapping_json.dump();
+    
+    // Build config JSON in flat format
+    nlohmann::json config;
+    config["dd_mode_remapping"] = remapping_str;
+    config["dd_configuration_option"] = "ensure_active";
+    
+    std::cout << "[SunshineWebUI] Applying new resolution config..." << std::endl;
+    
+    std::string config_json = config.dump();
+    std::string response = makeAuthenticatedRequest("/api/config", "POST", config_json);
+    
+    if (response.empty()) {
+        std::cerr << "[SunshineWebUI] Failed to save config" << std::endl;
+        return false;
+    }
+    
+    std::cout << "[SunshineWebUI] Config save response: " << response << std::endl;
+    std::cout << "[SunshineWebUI] Display resolution configured: 960x544 -> " << target_res << std::endl;
+    return true;
+    return true;
+}
+
+bool SunshineWebUI::getCurrentResolution(uint16_t& width, uint16_t& height) {
+    if (!isLoggedIn()) return false;
+    
+    std::string current_config_str = makeAuthenticatedRequest("/api/config");
+    if (current_config_str.empty()) return false;
+    
+    try {
+        nlohmann::json current = nlohmann::json::parse(current_config_str);
+        if (current.contains("dd_mode_remapping")) {
+            std::string remapping_str = current["dd_mode_remapping"];
+            nlohmann::json remapping = nlohmann::json::parse(remapping_str);
+            
+            if (remapping.contains("mixed") && remapping["mixed"].is_array()) {
+                for (const auto& entry : remapping["mixed"]) {
+                    if (entry.value("requested_resolution", "") == "960x544") {
+                        std::string res = entry.value("final_resolution", "");
+                        if (sscanf(res.c_str(), "%hux%hu", &width, &height) == 2) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+    } catch (...) {
+        return false;
+    }
+    return false;
+}
+
+
+bool SunshineWebUI::clearDisplayResolution() {
+    if (!isLoggedIn()) {
+        std::cerr << "[SunshineWebUI] Not logged in - cannot clear resolution" << std::endl;
+        return false;
+    }
+    
+    std::cout << "[SunshineWebUI] Clearing display resolution remapping" << std::endl;
+    
+    // Get current config
+    std::string current_config = makeAuthenticatedRequest("/api/config");
+    if (current_config.empty()) {
+        std::cerr << "[SunshineWebUI] Failed to get current config" << std::endl;
+        return false;
+    }
+    
+    try {
+        // Parse current config
+        nlohmann::json config_json = nlohmann::json::parse(current_config);
+        
+        // Remove 960x544 entry from mode_remapping if it exists
+        if (config_json.contains("dd") && 
+            config_json["dd"].contains("mode_remapping") && 
+            config_json["dd"]["mode_remapping"].contains("mixed")) {
+            
+            auto& mixed_array = config_json["dd"]["mode_remapping"]["mixed"];
+            
+            // Remove entry for 960x544
+            mixed_array.erase(
+                std::remove_if(
+                    mixed_array.begin(),
+                    mixed_array.end(),
+                    [](const nlohmann::json& entry) {
+                        return entry.value("requested_resolution", "") == "960x544";
+                    }
+                ),
+                mixed_array.end()
+            );
+            
+            // Send updated config back to Sunshine
+            std::string updated_config = config_json.dump();
+            std::string response = makeAuthenticatedRequest("/api/config", "POST", updated_config);
+            
+            if (response.empty()) {
+                std::cerr << "[SunshineWebUI] Failed to save cleared config" << std::endl;
+                return false;
+            }
+            
+            std::cout << "[SunshineWebUI] Display resolution mapping cleared" << std::endl;
+            return true;
+        }
+        
+        // No remapping to clear
+        std::cout << "[SunshineWebUI] No resolution remapping to clear" << std::endl;
+        return true;
+        
+    } catch (const std::exception& e) {
+        std::cerr << "[SunshineWebUI] Error clearing resolution: " << e.what() << std::endl;
+        return false;
     }
 }
 

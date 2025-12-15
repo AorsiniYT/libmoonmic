@@ -7,10 +7,12 @@
 
 #include "config.h"
 #include "sunshine_integration.h"
+#include "sunshine_webui.h"  // Added for setDisplayResolution
 #include "codec/ffmpeg_decoder.h"
 #include "network/udp_receiver.h"
 #include "network/connection_monitor.h"
 #include "platform/virtual_device.h"
+#include "display_manager.h"
 #include <speex/speex_resampler.h>
 #include <memory>
 #include <string>
@@ -24,12 +26,15 @@ namespace moonmic {
 #pragma pack(push, 1)
 struct MoonMicHandshake {
     uint32_t magic;           // 0x4D4F4F4E ("MOON")
-    uint8_t version;          // 1
+    uint8_t version;          // 2 (bumped for protocol extension)
     uint8_t pair_status;      // 0 or 1 from Sunshine validation
     uint8_t uniqueid_len;     // Length of uniqueid (16)
     char uniqueid[16];        // Client uniqueid
     uint8_t devicename_len;   // Length of devicename
     char devicename[64];      // Device name
+    uint16_t display_width;   // Target display width (0 = don't configure)
+    uint16_t display_height;  // Target display height (0 = don't configure)
+    uint8_t flags;            // Flags (0x01 = FORCE_UPDATE)
 };
 #pragma pack(pop)
 
@@ -59,6 +64,10 @@ public:
     // Hot-swap audio output without restarting connection
     bool switchAudioOutput(bool use_speakers);
     
+    // Set Sunshine WebUI instance for resolution control
+    void setSunshineWebUI(SunshineWebUI* webui) { sunshine_webui_ = webui; }
+    void setDisplayManager(DisplayManager* display_mgr) { display_manager_ = display_mgr; }
+    
     // Stats
     struct Stats {
         uint64_t packets_received = 0;
@@ -74,13 +83,18 @@ public:
     Stats getStats();  // Checks for connection timeout
     
 private:
-    void onPacketReceived(const uint8_t* data, size_t size, const std::string& sender_ip);
+    void onPacketReceived(const uint8_t* data, size_t size, const std::string& sender_ip, uint16_t sender_port);
     bool isClientAllowed(const std::string& ip);
-    bool validateHandshake(const uint8_t* data, size_t size, const std::string& sender_ip);
+    bool validateHandshake(const uint8_t* data, size_t size, const std::string& sender_ip, uint16_t& out_w, uint16_t& out_h);
     void sendControlSignal(uint32_t signal_magic);  // Send STOP/START to client
+    bool applyDisplayResolution(uint16_t width, uint16_t height);
+    bool applyFallbackDisplayResolution(uint16_t width, uint16_t height);
+    void resetConnectionState();
     
     Config config_;
     std::unique_ptr<SunshineIntegration> sunshine_;
+    SunshineWebUI* sunshine_webui_ = nullptr;  // Pointer to WebUI instance
+    DisplayManager* display_manager_ = nullptr; // Optional direct display control fallback
     std::unique_ptr<FFmpegDecoder> decoder_;
     SpeexResamplerState* resampler_;  // Speex resampler (16kHz -> 48kHz)
     std::unique_ptr<UDPReceiver> receiver_;
@@ -104,6 +118,7 @@ private:
     
     // Connection timeout tracking
     std::chrono::steady_clock::time_point last_packet_time_;
+    std::chrono::steady_clock::time_point last_validated_time_;
     static constexpr int CONNECTION_TIMEOUT_MS = 2000;  // 2 seconds without packets = disconnected
     
     // Audio buffers

@@ -19,17 +19,28 @@ typedef struct moonmic_opus_encoder_t moonmic_opus_encoder_t;
 typedef struct udp_sender_t udp_sender_t;
 typedef struct audio_capture_t audio_capture_t;
 
+// Magic constants
+#define MOONMIC_HANDSHAKE_MAGIC     0x4D4F4F4E  // "MOON"
+#define MOONMIC_HANDSHAKE_MAGIC_ALT 0x4E4F4F4D  // "NOOM"
+#define MOONMIC_HANDSHAKE_ACK       0x4B434148  // "HACK"
+
 // Handshake packet structure (matches host)
 #pragma pack(push, 1)
 typedef struct {
     uint32_t magic;           // 0x4D4F4F4E ("MOON")
-    uint8_t version;          // 1
+    uint8_t version;          // 2 (bumped for protocol extension)
     uint8_t pair_status;      // 0 or 1 from Sunshine validation
     uint8_t uniqueid_len;     // Length of uniqueid (16)
     char uniqueid[16];        // Client uniqueid
     uint8_t devicename_len;   // Length of devicename
     char devicename[64];      // Device name
+    uint16_t display_width;   // Target display width (e.g., 1280, 1920)
+    uint16_t display_height;  // Target display height (e.g., 720, 1080)
+    uint8_t flags;            // Flags (e.g. FORCE_UPDATE)
 } moonmic_handshake_t;
+
+#define MOONMIC_FLAG_FORCE_UPDATE 0x01
+
 #pragma pack(pop)
 
 /**

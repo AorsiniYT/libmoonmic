@@ -21,7 +21,7 @@ struct PacketHeader {
 
 class UDPReceiver {
 public:
-    using PacketCallback = std::function<void(const uint8_t* data, size_t size, const std::string& sender_ip)>;
+    using PacketCallback = std::function<void(const uint8_t* data, size_t size, const std::string& sender_ip, uint16_t sender_port)>;
     
     UDPReceiver();
     ~UDPReceiver();

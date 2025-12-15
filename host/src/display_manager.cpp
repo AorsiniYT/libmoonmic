@@ -19,80 +19,25 @@ namespace moonmic {
 
 DisplayManager::DisplayManager()
     : resolution_changed_(false) {
-    // Save current resolution on construction
-    original_resolution_ = getCurrentResolution();
-    std::cout << "[DisplayManager] Original resolution: " 
-              << original_resolution_.width << "x" << original_resolution_.height 
-              << "@" << original_resolution_.refresh_rate << "Hz" << std::endl;
+    // OS resolution changes disabled; avoid touching host mode.
 }
 
 DisplayManager::~DisplayManager() {
-    // Restore original resolution on destruction
-    if (resolution_changed_) {
-        std::cout << "[DisplayManager] Restoring original resolution on destroy" << std::endl;
-        restoreOriginalResolution();
-    }
+    // No-op: host resolution untouched
 }
 
 DisplayManager::Resolution DisplayManager::getCurrentResolution() {
+    // Return a neutral resolution without querying OS to avoid side effects
     Resolution res{};
-    
-#ifdef _WIN32
-    DEVMODE dm;
-    ZeroMemory(&dm, sizeof(dm));
-    dm.dmSize = sizeof(dm);
-    
-    if (EnumDisplaySettings(NULL, ENUM_CURRENT_SETTINGS, &dm)) {
-        res.width = dm.dmPelsWidth;
-        res.height = dm.dmPelsHeight;
-        res.refresh_rate = dm.dmDisplayFrequency;
-    }
-#else
-    // Linux: parse xrandr output
-    FILE* pipe = popen("xrandr | grep '*' | awk '{print $1}'", "r");
-    if (pipe) {
-        char buffer[128];
-        if (fgets(buffer, sizeof(buffer), pipe)) {
-            // Parse "1920x1080" format
-            if (sscanf(buffer, "%dx%d", &res.width, &res.height) == 2) {
-                // Get refresh rate
-                FILE* rate_pipe = popen("xrandr | grep '*' | awk '{print $2}' | tr -d '*+'", "r");
-                if (rate_pipe) {
-                    char rate_buf[32];
-                    if (fgets(rate_buf, sizeof(rate_buf), rate_pipe)) {
-                        res.refresh_rate = static_cast<int>(atof(rate_buf));
-                    }
-                    pclose(rate_pipe);
-                }
-            }
-        }
-        pclose(pipe);
-    }
-#endif
-    
+    res.width = 0;
+    res.height = 0;
+    res.refresh_rate = 0;
     return res;
 }
 
 bool DisplayManager::setResolution(int width, int height, int refresh_rate) {
-    std::cout << "[DisplayManager] Setting resolution: " 
-              << width << "x" << height << "@" << refresh_rate << "Hz" << std::endl;
-    
-    bool success = false;
-    
-#ifdef _WIN32
-    success = setResolutionWindows(width, height, refresh_rate);
-#else
-    success = setResolutionLinux(width, height, refresh_rate);
-#endif
-    
-    if (success) {
-        resolution_changed_ = true;
-        std::cout << "[DisplayManager] Resolution changed successfully" << std::endl;
-    } else {
-        std::cerr << "[DisplayManager] Failed to change resolution" << std::endl;
-    }
-    
-    return success;
+    std::cout << "[DisplayManager] setResolution skipped (OS resolution changes disabled)" << std::endl;
+    return false;
 }
 
 bool DisplayManager::restoreOriginalResolution() {

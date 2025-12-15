@@ -43,13 +43,13 @@ public:
      * @param refresh_rate Refresh rate in Hz (0 = use current)
      * @return true if successful
      */
-    bool setResolution(int width, int height, int refresh_rate = 60);
+        bool setResolution(int width, int height, int refresh_rate);
     
     /**
      * @brief Restore original resolution
      * @return true if successful
      */
-    bool restoreOriginalResolution();
+        bool restoreOriginalResolution();
     
     /**
      * @brief Get list of supported resolutions

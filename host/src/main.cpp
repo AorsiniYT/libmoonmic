@@ -658,6 +658,10 @@ int main_gui(int argc, char* argv[]) {
     SunshineSettingsGUI sunshine_settings_gui;
     DebugGUI debug_gui;
     
+    // Pass WebUI to receiver for resolution control
+    receiver.setSunshineWebUI(&sunshine_webui);
+    receiver.setDisplayManager(&display_mgr);
+    
     // Hide console by default (show only in debug mode)
     DebugGUI::showConsole(g_debug_mode);
     

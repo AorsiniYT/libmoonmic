@@ -11,6 +11,7 @@
 
 #include <string>
 #include <vector>
+#include <cstdint>
 
 namespace moonmic {
 
@@ -69,9 +70,39 @@ public:
      */
     bool refreshClientList();
     
-private:
-    Config& config_;
-    std::vector<WebUIPairedClient> paired_clients_;
+    /**
+     * @brief Configure display resolution remapping in Sunshine
+     * Sets up automatic resolution change when streaming
+     * @param target_width Target display width (e.g., 1280, 1920)
+     * @param target_height Target display height (e.g., 720, 1080)
+     * @return true if configuration applied successfully
+     * 
+     * This configures Sunshine to:
+     * 1. Change host monitor to target_width x target_height
+     * 2. Downscale stream to 960x544 for Vita
+     * 3. Provide high quality rendering before downscale
+     */
+    bool setDisplayResolution(uint16_t target_width, uint16_t target_height);
+
+    /**
+     * @brief Get current configured resolution from Sunshine
+     * @param[out] width Current resolution width
+     * @param[out] height Current resolution height
+     * @return true if successful
+     */
+    bool getCurrentResolution(uint16_t& width, uint16_t& height);
+
+        /**
+         * @brief Request Sunshine restart via WebUI API
+         */
+        bool restartSunshine();
+    
+    /**
+     * @brief Remove display resolution remapping from Sunshine
+     * Restores original resolution behavior
+     * @return true if configuration cleared successfully
+     */
+    bool clearDisplayResolution();
     
     /**
      * @brief Make authenticated HTTP request to Web UI API
@@ -79,12 +110,18 @@ private:
      * @param method HTTP method (GET or POST)
      * @param body Request body (for POST)
      * @return Response body, empty if failed
+     * 
+     * Made public to allow SunshineLogMonitor to fetch logs
      */
     std::string makeAuthenticatedRequest(
         const std::string& endpoint,
         const std::string& method = "GET",
         const std::string& body = ""
     );
+    
+private:
+    Config& config_;
+    std::vector<WebUIPairedClient> paired_clients_;
     
     /**
      * @brief Generate HTTP Basic Auth header

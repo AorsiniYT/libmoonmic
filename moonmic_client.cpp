@@ -37,8 +37,12 @@ static void* moonmic_worker_thread(void* arg) {
     // Send handshake packet first (and re-send every 3 seconds if not validated)
     moonmic_handshake_t handshake = {0};
     handshake.magic = 0x4D4F4F4E;  // "MOON"
-    handshake.version = 1;
+    handshake.version = 2;  // Bumped for protocol extension
     handshake.pair_status = client->config.pair_status;
+    
+    // Display resolution (0 = don't configure, non-zero = configure)
+    handshake.display_width = client->config.target_display_width;
+    handshake.display_height = client->config.target_display_height;
     
     // Copy uniqueid and devicename from config if provided
     if (client->config.uniqueid && client->config.uniqueid[0]) {
@@ -55,9 +59,10 @@ static void* moonmic_worker_thread(void* arg) {
     
     // Send initial handshake
     if (udp_sender_send(client->sender, &handshake, sizeof(handshake))) {
-        MOONMIC_LOG("[moonmic_worker] Handshake sent: device='%s', uniqueid_len=%d", 
+        MOONMIC_LOG("[moonmic_worker] Handshake sent: device='%s', uniqueid_len=%d, resolution=%dx%d", 
                    client->config.devicename ? client->config.devicename : "unknown",
-                   handshake.uniqueid_len);
+                   handshake.uniqueid_len,
+                   handshake.display_width, handshake.display_height);
     } else {
         MOONMIC_LOG("[moonmic_worker] WARNING: Failed to send handshake");
     }

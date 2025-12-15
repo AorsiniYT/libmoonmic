@@ -31,6 +31,17 @@ AudioReceiver::~AudioReceiver() {
     stop();
 }
 
+void AudioReceiver::resetConnectionState() {
+    client_validated_ = false;
+    stats_.is_connected = false;
+    stats_.is_receiving = false;
+    last_validated_ip_.clear();
+    last_validated_time_ = std::chrono::steady_clock::time_point{};
+    if (connection_monitor_) {
+        connection_monitor_->stop();
+    }
+}
+
 bool AudioReceiver::start(const Config& config) {
     if (running_) {
         return false;
@@ -79,8 +90,8 @@ bool AudioReceiver::start(const Config& config) {
     
     // Initialize UDP receiver
     receiver_ = std::make_unique<UDPReceiver>();
-    receiver_->setPacketCallback([this](const uint8_t* data, size_t size, const std::string& ip) {
-        onPacketReceived(data, size, ip);
+    receiver_->setPacketCallback([this](const uint8_t* data, size_t size, const std::string& ip, uint16_t port) {
+        onPacketReceived(data, size, ip, port);
     });
     
     if (!receiver_->start(config_.server.port, config_.server.bind_address)) {
@@ -250,29 +261,57 @@ bool AudioReceiver::isClientAllowed(const std::string& ip) {
     return false;
 }
 
-void AudioReceiver::onPacketReceived(const uint8_t* data, size_t size, const std::string& sender_ip) {
+void AudioReceiver::onPacketReceived(const uint8_t* data, size_t size, const std::string& sender_ip, uint16_t sender_port) {
     stats_.packets_received++;
     stats_.bytes_received += size;
     stats_.last_sender_ip = sender_ip;
     stats_.is_receiving = true;
     last_packet_time_ = std::chrono::steady_clock::now();  // Update timestamp for timeout detection
-    
-    // First packet must be handshake for validation
-    if (!client_validated_) {
-        if (!validateHandshake(data, size, sender_ip)) {
+
+    // Handshake handling: if we receive a MOON handshake at any time, treat it as (re)connection
+    const bool is_handshake_magic = (size >= sizeof(MoonMicHandshake)) &&
+        (((const MoonMicHandshake*)data)->magic == 0x4D4F4F4E || ((const MoonMicHandshake*)data)->magic == 0x4E4F4F4D);
+
+    if (is_handshake_magic) {
+        // Reset state to allow new session (e.g., after client reconnect or app close)
+        resetConnectionState();
+
+        uint16_t current_w = 0, current_h = 0;
+        if (!validateHandshake(data, size, sender_ip, current_w, current_h)) {
             stats_.packets_dropped++;
             return;  // DENY - invalid handshake
         }
+
         client_validated_ = true;
         last_validated_ip_ = sender_ip;
-        
-        // Start sending pings to validated client
+        stats_.is_connected = true;
+        last_validated_time_ = std::chrono::steady_clock::now();
+
         if (!connection_monitor_) {
             connection_monitor_ = std::make_unique<ConnectionMonitor>();
         }
-        connection_monitor_->start(sender_ip, config_.server.port);
-        std::cout << "[AudioReceiver] Started heartbeat monitor for " << sender_ip << std::endl;
+        // IMPORTANT: Use sender_port, not config_.server.port
+        connection_monitor_->start(sender_ip, sender_port);
+        std::cout << "[AudioReceiver] Started heartbeat monitor for " << sender_ip << ":" << sender_port << std::endl;
+
+        // Send Handshake ACK to confirm availability to client
+        // IMPORTANT: Send back the FULL packet received, not just sizeof(MoonMicHandshake)
+        // Because the client's moonmic_handshake_t is larger than our local definition
+        uint8_t ack_buffer[256];
+        memcpy(ack_buffer, data, std::min(size, sizeof(ack_buffer)));
         
+        // Modify magic to ACK and update resolution fields
+        MoonMicHandshake* ack = (MoonMicHandshake*)ack_buffer;
+        ack->magic = 0x4B434148; // "HACK"
+        if (current_w > 0 && current_h > 0) {
+            ack->display_width = current_w;
+            ack->display_height = current_h;
+        }
+        
+        // Send FULL packet back (same size as received)
+        connection_monitor_->sendPacket(ack_buffer, size);
+        std::cout << "[AudioReceiver] Sent Handshake ACK (" << size << " bytes) to " << sender_ip << std::endl;
+
         return;  // Handshake consumed, don't process as audio
     }
     
@@ -509,7 +548,7 @@ void AudioReceiver::onPacketReceived(const uint8_t* data, size_t size, const std
 }
 
 
-bool AudioReceiver::validateHandshake(const uint8_t* data, size_t size, const std::string& sender_ip) {
+bool AudioReceiver::validateHandshake(const uint8_t* data, size_t size, const std::string& sender_ip, uint16_t& out_w, uint16_t& out_h) {
     if (size < sizeof(MoonMicHandshake)) {
         std::cerr << "[AudioReceiver] Packet too small for handshake: " << size << " bytes" << std::endl;
         return false;
@@ -538,6 +577,10 @@ bool AudioReceiver::validateHandshake(const uint8_t* data, size_t size, const st
     
     if (!config_.security.enable_whitelist) {
         std::cout << "[AudioReceiver] Client connected: " << client_devicename_ << " [whitelist disabled]" << std::endl;
+
+        // Reset packet timeout baseline when a fresh handshake arrives
+        last_packet_time_ = std::chrono::steady_clock::now();
+        stats_.is_connected = true;
         return true;
     }
     
@@ -564,14 +607,115 @@ bool AudioReceiver::validateHandshake(const uint8_t* data, size_t size, const st
     // =========================================================================
     
     if (hs->pair_status != 1) {
-        std::cerr << "[AudioReceiver] DENY: Client '" << client_devicename_ 
-                  << "' not validated by Sunshine (pair_status=" << (int)hs->pair_status << ")" << std::endl;
-        std::cerr << "[AudioReceiver] Ensure client is paired with Sunshine host" << std::endl;
-        return false;
+        auto now = std::chrono::steady_clock::now();
+        auto grace_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_validated_time_).count();
+        bool grace = (last_validated_time_.time_since_epoch().count() != 0) &&
+                     (last_validated_ip_ == sender_ip) &&
+                     (grace_ms < 8000);
+
+        if (grace) {
+            std::cout << "[AudioReceiver] Grace-accept pair_status=0 during Sunshine restart (" << grace_ms << "ms since last validation)" << std::endl;
+        } else {
+            std::cerr << "[AudioReceiver] DENY: Client '" << client_devicename_ 
+                      << "' not validated by Sunshine (pair_status=" << (int)hs->pair_status << ")" << std::endl;
+            std::cerr << "[AudioReceiver] Ensure client is paired with Sunshine host" << std::endl;
+            return false;
+        }
     }
     
     std::cout << "[AudioReceiver] Client validated (pair_status=1): " << client_devicename_ << std::endl;
+    
+    // =========================================================================
+    // DISPLAY RESOLUTION CONFIGURATION (Protocol v2+)
+    // =========================================================================
+    // If client sent display resolution (version >= 2), configure Sunshine
+    if (hs->version >= 2 && hs->display_width > 0 && hs->display_height > 0) {
+        std::cout << "[AudioReceiver] Client requests display resolution: " 
+                  << hs->display_width << "x" << hs->display_height << std::endl;
+        
+        // Query current resolution
+        out_w = 0; out_h = 0;
+        if (sunshine_webui_) {
+            sunshine_webui_->getCurrentResolution(out_w, out_h);
+        }
+
+        bool force_update = (hs->flags & 0x01); // FORCE_UPDATE
+        bool should_update = true;
+
+        if (out_w > 0 && out_h > 0 && !force_update) {
+            if (out_w != hs->display_width || out_h != hs->display_height) {
+                std::cout << "[AudioReceiver] Resolution mismatch (Current: " << out_w << "x" << out_h 
+                          << ", Target: " << hs->display_width << "x" << hs->display_height 
+                          << "). Waiting for FORCE flag." << std::endl;
+                should_update = false;
+            }
+        }
+
+        // Validate it's a standard resolution
+        bool is_valid = false;
+        if (hs->display_width == 1280 && hs->display_height == 720) is_valid = true;    // 720p
+        if (hs->display_width == 1600 && hs->display_height == 900) is_valid = true;    // 900p
+        if (hs->display_width == 1920 && hs->display_height == 1080) is_valid = true;   // 1080p
+        if (hs->display_width == 2560 && hs->display_height == 1440) is_valid = true;   // 1440p
+        if (hs->display_width == 3840 && hs->display_height == 2160) is_valid = true;   // 4K
+        
+        if (is_valid && should_update) {
+            if (!applyDisplayResolution(hs->display_width, hs->display_height)) {
+                std::cerr << "[AudioReceiver] Warning: host resolution request could not be applied automatically" << std::endl;
+            }
+        } else if (!is_valid) {
+            std::cerr << "[AudioReceiver] Invalid resolution request: " 
+                      << hs->display_width << "x" << hs->display_height << std::endl;
+        }
+    }
+    
     return true;
+}
+
+bool AudioReceiver::applyDisplayResolution(uint16_t width, uint16_t height) {
+    bool applied = false;
+    bool attempted_sunshine = false;
+    
+    if (sunshine_webui_) {
+        attempted_sunshine = true;
+        
+        // Check if resolution already matches to avoid unnecessary restart
+        uint16_t current_w = 0, current_h = 0;
+        bool has_current = sunshine_webui_->getCurrentResolution(current_w, current_h);
+        bool already_correct = has_current && (current_w == width) && (current_h == height);
+        
+        if (already_correct) {
+            std::cout << "[AudioReceiver] Resolution already set to " << width << "x" << height 
+                      << " - No restart needed" << std::endl;
+            return true;
+        }
+        
+        if (sunshine_webui_->setDisplayResolution(width, height)) {
+            std::cout << "[AudioReceiver] ✓ Sunshine configured for " << width << "x"
+                      << height << " → 960x544 downscale (host mode intact)" << std::endl;
+            applied = true;
+
+            // Reiniciar Sunshine solo si realmente cambió la configuración
+            if (sunshine_webui_->restartSunshine()) {
+                std::cout << "[AudioReceiver] Sunshine restart requested after resolution change" << std::endl;
+            } else {
+                std::cerr << "[AudioReceiver] Sunshine restart request failed" << std::endl;
+            }
+        } else {
+            std::cerr << "[AudioReceiver] Sunshine WebUI failed to apply resolution" << std::endl;
+        }
+    } else {
+        std::cerr << "[AudioReceiver] Sunshine WebUI not available - skipping API resolution change" << std::endl;
+    }
+
+    // Do not force host display changes; rely solely on Sunshine remapping.
+    return applied;
+}
+
+bool AudioReceiver::applyFallbackDisplayResolution(uint16_t width, uint16_t height) {
+    // Host resolution should remain untouched. Disable fallback.
+    std::cout << "[AudioReceiver] Fallback display resolution disabled (host mode unchanged)" << std::endl;
+    return false;
 }
 
 AudioReceiver::Stats AudioReceiver::getStats() {
@@ -594,13 +738,7 @@ AudioReceiver::Stats AudioReceiver::getStats() {
             if (elapsed > CONNECTION_TIMEOUT_MS * 2 && !paused_) {
                 if (client_validated_) {
                     std::cout << "[AudioReceiver] Client disconnected: " << client_devicename_ << std::endl;
-                    client_validated_ = false;
-                    stats_.is_connected = false;
-                    
-                    // Stop heartbeat monitor
-                    if (connection_monitor_) {
-                        connection_monitor_->stop();
-                    }
+                    resetConnectionState();
                 }
             }
         }

@@ -60,6 +60,10 @@ typedef struct {
     const char* cert_path;    /**< Path to client certificate PEM (optional) */
     const char* key_path;     /**< Path to client key PEM (optional) */
     int pair_status;          /**< Pair status from Sunshine validation (0=unknown/fail, 1=paired) */
+    
+    // NEW: Display resolution control (for Sunshine configuration)
+    uint16_t target_display_width;   /**< Target rendering width (e.g., 1280, 1920, 0=don't configure) */
+    uint16_t target_display_height;  /**< Target rendering height (e.g., 720, 1080, 0=don't configure) */
 } moonmic_config_t;
 
 /**
