@@ -32,10 +32,19 @@ typedef struct heartbeat_monitor_t heartbeat_monitor_t;
 
 /**
  * @brief Create and start heartbeat monitor
- * @param port UDP port to listen for pings
+ * @param socket_fd Existing socket file descriptor to listen on
+ * @param host_ip Host IP string
+ * @param host_port Host port associated with the socket
  * @return Monitor instance or NULL on error
  */
-heartbeat_monitor_t* heartbeat_monitor_create(uint16_t port);
+heartbeat_monitor_t* heartbeat_monitor_create(int socket_fd, const char* host_ip, uint16_t host_port);
+
+/**
+ * @brief Get current round-trip time in milliseconds
+ * @param monitor Monitor instance
+ * @return RTT in ms, or -1 if not available
+ */
+int heartbeat_monitor_get_rtt(heartbeat_monitor_t* monitor);
 
 /**
  * @brief Destroy heartbeat monitor

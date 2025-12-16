@@ -72,18 +72,20 @@ public:
     struct Stats {
         uint64_t packets_received = 0;
         uint64_t packets_dropped = 0;
+        uint64_t packets_dropped_lag = 0; // New: Auto-corrected drops due to lag
         uint64_t bytes_received = 0;
         std::string last_sender_ip;
         std::string client_name; 
         bool is_connected = false;   // Heartbeat alive (client validated)
         bool is_receiving = false;   // Actually receiving audio data
         bool is_paused = false;      // Receiver is paused
+        int rtt_ms = -1;             // Round trip time (ms)
     };
     
     Stats getStats();  // Checks for connection timeout
     
 private:
-    void onPacketReceived(const uint8_t* data, size_t size, const std::string& sender_ip, uint16_t sender_port);
+    void onPacketReceived(const uint8_t* data, size_t size, const std::string& sender_ip, uint16_t sender_port, bool is_lagging = false);
     bool isClientAllowed(const std::string& ip);
     bool validateHandshake(const uint8_t* data, size_t size, const std::string& sender_ip, uint16_t& out_w, uint16_t& out_h);
     void sendControlSignal(uint32_t signal_magic);  // Send STOP/START to client

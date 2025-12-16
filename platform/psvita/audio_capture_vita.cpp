@@ -100,6 +100,7 @@ static int vita_audio_read(audio_capture_t* self, float* buffer, size_t frames) 
     // Read S16 samples from microphone (16kHz, 256 samples)
     int result = sceAudioInInput(data->port, data->temp_buffer);
     if (result < 0) {
+        MOONMIC_LOG("[audio_capture_vita] ERROR: sceAudioInInput failed: 0x%08X\n", result);
         return -1;
     }
     

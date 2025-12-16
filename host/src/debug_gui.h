@@ -23,10 +23,12 @@ namespace moonmic {
 struct AudioStats {
     uint64_t packets_received = 0;
     uint64_t packets_dropped = 0;
+    uint64_t packets_dropped_lag = 0; // New: Auto-corrected drops
     uint64_t bytes_received = 0;
     std::string last_sender_ip;
     std::string client_name;
     bool is_receiving = false;
+    int rtt_ms = -1;
 };
 
 /**
@@ -235,6 +237,8 @@ private:
     uint64_t total_packets_ = 0;
     uint64_t total_bytes_ = 0;
     uint64_t dropped_packets_ = 0;
+    uint64_t dropped_packets_lag_ = 0; // Cached lag drops
+    int current_rtt_ = -1;
     
 #ifdef _WIN32
     HANDLE process_handle_ = nullptr;

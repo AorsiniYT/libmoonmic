@@ -23,6 +23,7 @@ typedef struct audio_capture_t audio_capture_t;
 #define MOONMIC_HANDSHAKE_MAGIC     0x4D4F4F4E  // "MOON"
 #define MOONMIC_HANDSHAKE_MAGIC_ALT 0x4E4F4F4D  // "NOOM"
 #define MOONMIC_HANDSHAKE_ACK       0x4B434148  // "HACK"
+#define MOONMIC_PONG_MAGIC          0x504F4E47  // "PONG"
 
 // Handshake packet structure (matches host)
 #pragma pack(push, 1)
@@ -130,7 +131,7 @@ struct moonmic_opus_encoder_t {
 };
 
 /**
- * @brief UDP sender
+ * @brief Internal UDP sender structure
  */
 struct udp_sender_t {
     int socket_fd;

@@ -607,9 +607,12 @@ void DebugGUI::update(float delta_time, const AudioStats& stats, bool connected,
         
         last_packets_ = stats.packets_received;
         last_bytes_ = stats.bytes_received;
+        last_bytes_ = stats.bytes_received;
         total_packets_ = stats.packets_received;
         total_bytes_ = stats.bytes_received;
         dropped_packets_ = stats.packets_dropped;
+        dropped_packets_lag_ = stats.packets_dropped_lag;
+        current_rtt_ = stats.rtt_ms;
         
         // Collect system metrics
         collectSystemMetrics();
@@ -621,7 +624,7 @@ void DebugGUI::update(float delta_time, const AudioStats& stats, bool connected,
         sample.throughput_kbps = throughput_kbps_;
         sample.cpu_usage_percent = current_cpu_;
         sample.memory_mb = current_memory_;
-        sample.latency_ms = 0.0f; // TODO: implement latency measurement
+        sample.latency_ms = (current_rtt_ >= 0) ? (float)current_rtt_ : 0.0f;
         sample.jitter_ms = 0.0f;
         sample.packet_loss_percent = (total_packets_ > 0) ? 
             (dropped_packets_ * 100.0f / (total_packets_ + dropped_packets_)) : 0.0f;
@@ -633,7 +636,7 @@ void DebugGUI::update(float delta_time, const AudioStats& stats, bool connected,
         throughput_graph_->update(history_.getThroughputKbps(), throughput_kbps_);
         cpu_graph_->update(history_.getCpuUsage(), current_cpu_);
         memory_graph_->update(history_.getMemoryMb(), current_memory_);
-        latency_graph_->update(history_.getLatency(), 0.0f);
+        latency_graph_->update(history_.getLatency(), sample.latency_ms);
     }
 }
 
@@ -799,6 +802,13 @@ void DebugGUI::renderStatisticsTab() {
     ImGui::Separator();
     ImGui::Text("Packets Received:"); ImGui::SameLine(180); ImGui::Text("%llu", (unsigned long long)total_packets_);
     ImGui::Text("Packets Dropped:"); ImGui::SameLine(180); ImGui::Text("%llu", (unsigned long long)dropped_packets_);
+    
+    if (dropped_packets_lag_ > 0) {
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Auto-Corrected:"); 
+        ImGui::SameLine(180); 
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "%llu (Lag)", (unsigned long long)dropped_packets_lag_);
+    }
+
     ImGui::Text("Bytes Received:"); ImGui::SameLine(180); ImGui::Text("%.2f MB", total_bytes_ / (1024.0f * 1024.0f));
     ImGui::Text("Current Rate:"); ImGui::SameLine(180); ImGui::Text("%.1f pps", packets_per_second_);
     ImGui::Text("Throughput:"); ImGui::SameLine(180); ImGui::Text("%.2f KB/s", throughput_kbps_);
@@ -845,7 +855,12 @@ void DebugGUI::renderNetworkTab() {
     ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Network Statistics");
     ImGui::Separator();
     
-    ImGui::Text("(Network latency measurement coming soon)");
+    if (current_rtt_ >= 0) {
+        ImGui::Text("Round-Trip Time (RTT):"); ImGui::SameLine(180);
+        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "%d ms", current_rtt_);
+    } else {
+        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Waiting for RTT...");
+    }
     
     ImGui::Spacing();
     ImGui::Spacing();

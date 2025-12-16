@@ -160,6 +160,13 @@ bool moonmic_is_connected(moonmic_client_t* client);
  */
 const char* moonmic_get_version();
 
+/**
+ * @brief Get current round-trip time in milliseconds
+ * @param client Client instance
+ * @return RTT in ms, or -1 if unavailable
+ */
+int moonmic_client_get_rtt(moonmic_client_t* client);
+
 #ifdef __cplusplus
 }
 #endif

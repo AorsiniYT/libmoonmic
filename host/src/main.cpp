@@ -711,10 +711,12 @@ int main_gui(int argc, char* argv[]) {
         AudioStats stats;
         stats.packets_received = receiver_stats.packets_received;
         stats.packets_dropped = receiver_stats.packets_dropped;
+        stats.packets_dropped_lag = receiver_stats.packets_dropped_lag;
         stats.bytes_received = receiver_stats.bytes_received;
         stats.last_sender_ip = receiver_stats.last_sender_ip;
         stats.client_name = receiver_stats.client_name;
         stats.is_receiving = receiver_stats.is_receiving;
+        stats.rtt_ms = receiver_stats.rtt_ms;
         
         // Update debug GUI (must be called every frame for animations)
         debug_gui.update(delta_time, stats, connected, receiving);

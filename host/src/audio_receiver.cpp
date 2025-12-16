@@ -40,6 +40,34 @@ void AudioReceiver::resetConnectionState() {
     if (connection_monitor_) {
         connection_monitor_->stop();
     }
+    
+    // Reset Audio Output to clear accumulated latency buffers
+    // Completely recreate the device to ensure clean state (fixes Speaker Mode init issues)
+    if (virtual_device_) {
+        // std::cout << "[AudioReceiver] Resetting audio device..." << std::endl;
+        virtual_device_->close();
+        virtual_device_.reset(); // Destroy old instance
+        
+        virtual_device_ = VirtualDevice::create(); // Create fresh instance
+        
+        std::string output_device = config_.audio.use_speaker_mode ? "" : config_.audio.virtual_device_name;
+        
+        // Re-init with same params
+        if (!virtual_device_->init(output_device, 48000, config_.audio.channels)) {
+            std::cerr << "[AudioReceiver] Failed to recreate virtual device on reset" << std::endl;
+        } else {
+             system_sample_rate_ = virtual_device_->getSampleRate();
+             std::cout << "[AudioReceiver] Audio device reset. Rate: " << system_sample_rate_ << "Hz" << std::endl;
+        }
+    }
+    
+    // Reset Resampler - destroy it forces re-creation on next packet with correct rates
+    if (resampler_) {
+        speex_resampler_destroy(resampler_);
+        resampler_ = nullptr;
+    }
+    detected_stream_rate_ = 0;
+    rate_logged_ = false;
 }
 
 bool AudioReceiver::start(const Config& config) {
@@ -90,8 +118,8 @@ bool AudioReceiver::start(const Config& config) {
     
     // Initialize UDP receiver
     receiver_ = std::make_unique<UDPReceiver>();
-    receiver_->setPacketCallback([this](const uint8_t* data, size_t size, const std::string& ip, uint16_t port) {
-        onPacketReceived(data, size, ip, port);
+    receiver_->setPacketCallback([this](const uint8_t* data, size_t size, const std::string& ip, uint16_t port, bool is_lagging) {
+        onPacketReceived(data, size, ip, port, is_lagging);
     });
     
     if (!receiver_->start(config_.server.port, config_.server.bind_address)) {
@@ -261,7 +289,7 @@ bool AudioReceiver::isClientAllowed(const std::string& ip) {
     return false;
 }
 
-void AudioReceiver::onPacketReceived(const uint8_t* data, size_t size, const std::string& sender_ip, uint16_t sender_port) {
+void AudioReceiver::onPacketReceived(const uint8_t* data, size_t size, const std::string& sender_ip, uint16_t sender_port, bool is_lagging) {
     stats_.packets_received++;
     stats_.bytes_received += size;
     stats_.last_sender_ip = sender_ip;
@@ -281,7 +309,8 @@ void AudioReceiver::onPacketReceived(const uint8_t* data, size_t size, const std
             stats_.packets_dropped++;
             return;  // DENY - invalid handshake
         }
-
+        
+        // Handshake validated successfully
         client_validated_ = true;
         last_validated_ip_ = sender_ip;
         stats_.is_connected = true;
@@ -315,6 +344,55 @@ void AudioReceiver::onPacketReceived(const uint8_t* data, size_t size, const std
         return;  // Handshake consumed, don't process as audio
     }
     
+    // Check for PING (Client Latency Request)
+    // Magic: 0x50494E47 ("PING")
+    const uint32_t PACKET_MAGIC_PING = 0x50494E47;
+    // Magic: 0x504F4E47 ("PONG")
+    const uint32_t PACKET_MAGIC_PONG = 0x504F4E47;
+    
+    if (size >= 12) { // 4 bytes Magic + 8 bytes Timestamp
+        uint32_t magic;
+        memcpy(&magic, data, 4);
+        
+        if (magic == PACKET_MAGIC_PING) {
+             // Client sent PING. Echo back as PONG for Client RTT calc.
+             // Use main receiver socket to reply (better for NAT/Firewal)
+             if (receiver_) {
+                 // Create PONG packet with same timestamp
+                 std::vector<uint8_t> pong(size);
+                 memcpy(pong.data(), data, size);
+                 uint32_t pong_magic = PACKET_MAGIC_PONG;
+                 memcpy(pong.data(), &pong_magic, 4); // Overwrite Magic
+                 
+                 receiver_->sendTo(pong.data(), size, sender_ip, sender_port);
+             }
+             return; 
+        } else if (magic == PACKET_MAGIC_PONG) {
+             // Client replied PONG to our PING. Calculate Host RTT.
+             uint64_t timestamp;
+             memcpy(&timestamp, data + 4, 8);
+             
+             // Get current time in same format (system_clock micros)
+             auto now = std::chrono::system_clock::now();
+             auto duration = now.time_since_epoch();
+             uint64_t now_us = std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
+             
+             int64_t diff_us = (int64_t)(now_us - timestamp);
+             
+             // Sanity check (RTT < 5 seconds)
+             if (diff_us >= 0 && diff_us < 5000000) {
+                 stats_.rtt_ms = (int)(diff_us / 1000);
+             }
+             
+             // Refresh connection alive status
+             stats_.last_sender_ip = sender_ip; 
+             stats_.is_receiving = true;
+             last_packet_time_ = std::chrono::steady_clock::now();
+
+             return;
+        }
+    }
+    
     // Parse packet header MANUALLY to match Vita's manual writing
     // The header size is MOONMIC_HEADER_SIZE (20 bytes: 4+4+8+4)
     if (size < MOONMIC_HEADER_SIZE) {
@@ -332,6 +410,18 @@ void AudioReceiver::onPacketReceived(const uint8_t* data, size_t size, const std
     if (magic != MOONMIC_MAGIC) {
         // Not an audio packet, ignore (could be handshake probe)
         return;
+    }
+
+    // AUTO-CORRECTION: If we are lagging (backlog detected), drop audio packets to catch up
+    if (is_lagging) {
+        static int lag_drop_counter = 0;
+        lag_drop_counter++;
+        if (lag_drop_counter % 50 == 0) { // Log every 50th drop to avoid spam
+             std::cout << "[AudioReceiver] ⚠ LAG DETECTED: Dropping packet to drain buffer (Backlog > 2048 bytes)" << std::endl;
+        }
+        stats_.packets_dropped++;
+        stats_.packets_dropped_lag++; // Count specific auto-correction drops
+        return; // Drop packet
     }
     
     // Read sequence (bytes 4-7, little-endian)  
@@ -723,24 +813,25 @@ AudioReceiver::Stats AudioReceiver::getStats() {
     stats_.is_connected = client_validated_;
     stats_.is_paused = paused_;
     
-    // Check for connection timeout (no packets received)
-    // IMPORTANT: Only check timeout when NOT paused
-    // When paused, client intentionally stops sending audio packets
-    if (stats_.is_receiving && !paused_) {
+    // Check for timeout if we think we are connected
+    if (stats_.is_connected && connection_monitor_ && last_validated_time_.time_since_epoch().count() > 0) {
         auto now = std::chrono::steady_clock::now();
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_packet_time_).count();
+        auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_packet_time_);
         
-        if (elapsed > CONNECTION_TIMEOUT_MS) {
-            stats_.is_receiving = false;
-            
-            // Also reset client validation if disconnected for too long
-            // But NOT if we're paused - paused client is still connected
-            if (elapsed > CONNECTION_TIMEOUT_MS * 2 && !paused_) {
-                if (client_validated_) {
-                    std::cout << "[AudioReceiver] Client disconnected: " << client_devicename_ << std::endl;
-                    resetConnectionState();
-                }
-            }
+        // Timeout logic: 2 seconds without packets = partially disconnected
+        // 4 seconds = Assume full disconnect, reset handshake
+        if (diff.count() > 2000) {
+             stats_.is_receiving = false;
+             // We don't mark is_connected = false immediately, we wait for longer timeout
+             if (diff.count() > 4000) {
+                 stats_.is_connected = false;
+                 // Don't reset connection state fully, allow quick resume
+                 // If we were connected, and now we are not, reset the state
+                 if (client_validated_) {
+                     std::cout << "[AudioReceiver] Client disconnected (timeout): " << client_devicename_ << std::endl;
+                     resetConnectionState();
+                 }
+             }
         }
     }
     return stats_;

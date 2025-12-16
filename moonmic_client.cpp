@@ -92,6 +92,21 @@ static void* moonmic_worker_thread(void* arg) {
     // Vita-optimized probe interval: 3 seconds (balanced between responsiveness and battery)
     const uint64_t PROBE_INTERVAL_MS = 3000;
     
+    // FLUSH BUFFER: Read and discard potential stale audio accumulated during connection setup
+    // Read up to 10 frames or until empty
+    float* dump_buffer = (float*)malloc(frame_size * client->config.channels * sizeof(float));
+    if (dump_buffer) {
+        MOONMIC_LOG("[moonmic_worker] Flushing audio buffer...");
+        for (int i = 0; i < 10; i++) {
+            // Read non-blocking if possible, but Vita API is blocking. 
+            // We assume max buffer isn't huge. Just read a few frames.
+            int read = client->capture->read(client->capture, dump_buffer, frame_size);
+            if (read <= 0) break;
+        }
+        free(dump_buffer);
+        MOONMIC_LOG("[moonmic_worker] Flush complete.");
+    }
+    
     while (client->running) {
         // Check heartbeat status - if host disconnected, wait and resend handshake when reconnected
         if (client->heartbeat_monitor) {
@@ -262,17 +277,25 @@ static void* moonmic_worker_thread(void* arg) {
                            frames_read, client->accumulated_samples, client->target_frame_size);
             }
         } else {
-            // Copy only what fits
-            int frames_to_copy = space_available / client->config.channels;
+            // Copy only what fits to complete the current frame
+            int frames_to_copy = space_available; // Single channel logic for simplicity in variable name, but handles channels below
+            
             memcpy(client->accumulation_buffer + client->accumulated_samples * client->config.channels,
                    pcm_buffer,
                    frames_to_copy * client->config.channels * sizeof(float));
             client->accumulated_samples += frames_to_copy;
             
-            if (accum_log_count < 10) {
-                MOONMIC_LOG("[ACCUM] Copied PARTIAL %d frames (of %d), buffer FULL at %zu",
-                           frames_to_copy, frames_read, client->accumulated_samples);
-            }
+            // At this point buffer is FULL (320 samples) -> Encode and Send happens below
+            // WE MUST REMEMBER TO COPY THE REST after sending!
+            // We'll handle this by checking if we have leftovers AFTER the send block
+        }
+        
+        // Calculate leftovers for later
+        int samples_leftover = 0;
+        int leftover_offset = 0;
+        if (samples_to_copy > space_available) {
+             samples_leftover = samples_to_copy - space_available;
+             leftover_offset = space_available;
         }
         
         // When we have enough samples (320), encode with Opus
@@ -341,6 +364,18 @@ static void* moonmic_worker_thread(void* arg) {
             
             // Reset accumulation buffer for next frame
             client->accumulated_samples = 0;
+            
+            // If we had leftovers from the input buffer, copy them now
+            if (samples_leftover > 0) {
+               memcpy(client->accumulation_buffer, 
+                      pcm_buffer + leftover_offset, // pcm_buffer is float* so pointer arithmetic works on samples
+                      samples_leftover * sizeof(float));
+               client->accumulated_samples = samples_leftover / client->config.channels; // Assuming leftovers are multiple of channels
+               
+               if (accum_log_count < 10) {
+                   MOONMIC_LOG("[ACCUM] Carried over %d leftover samples to new frame", samples_leftover);
+               }
+            }
         }
     }
     
@@ -486,11 +521,22 @@ moonmic_client_t* moonmic_create(const moonmic_config_t* config) {
     }
     
     // Create heartbeat monitor
-    MOONMIC_LOG("[moonmic_create] Creating heartbeat monitor");
-    client->heartbeat_monitor = heartbeat_monitor_create(client->config.port);
-    if (!client->heartbeat_monitor) {
-        MOONMIC_LOG("[moonmic_create] WARNING: Failed to create heartbeat monitor (connection status unavailable)");
-        // Not fatal - continue without connection monitoring
+    // IMPORTANT: We must use the SAME socket as the sender to receive ACKs/PINGs
+    // The host replies to the source port of our audio packets.
+    if (client->sender) {
+        // Pass IP/Port for active RTT pinging
+        client->heartbeat_monitor = heartbeat_monitor_create(
+            client->sender->socket_fd, 
+            client->config.host_ip, 
+            client->config.port
+        );
+        
+        if (client->heartbeat_monitor) {
+            MOONMIC_LOG("[moonmic_create] Heartbeat monitor started on shared socket %d", 
+                        client->sender->socket_fd);
+        } else {
+            MOONMIC_LOG("[moonmic_create] Failed to create heartbeat monitor");
+        }
     }
     
     // Allocate accumulation buffer for Opus mode (for 320-sample batching)
@@ -674,6 +720,16 @@ moonmic_connection_status_t moonmic_get_connection_status(moonmic_client_t* clie
         return MOONMIC_DISCONNECTED;
     }
     return heartbeat_monitor_get_status(client->heartbeat_monitor);
+}
+
+bool moonmic_is_paused(moonmic_client_t* client) {
+    if (!client || !client->heartbeat_monitor) return false;
+    return heartbeat_monitor_is_paused(client->heartbeat_monitor);
+}
+
+int moonmic_client_get_rtt(moonmic_client_t* client) {
+    if (!client || !client->heartbeat_monitor) return -1;
+    return heartbeat_monitor_get_rtt(client->heartbeat_monitor);
 }
 
 bool moonmic_is_connected(moonmic_client_t* client) {

@@ -7,6 +7,9 @@
 #include <iostream>
 #include <cstring>
 
+#ifndef _WIN32
+#include <sys/ioctl.h>
+#endif
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -154,18 +157,48 @@ void UDPReceiver::receiveLoop() {
         if (received < 20) {  // Minimum header size
             continue;
         }
-        
         // Get sender IP
         char sender_ip[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &sender_addr.sin_addr, sender_ip, INET_ADDRSTRLEN);
         uint16_t sender_port = ntohs(sender_addr.sin_port);
         
+        // CHECK FOR BACKLOG (Lag Detection)
+        bool is_lagging = false;
+        unsigned long bytes_available = 0;
+        
+#ifdef _WIN32
+        ioctlsocket(socket_fd_, FIONREAD, &bytes_available);
+#else
+        ioctl(socket_fd_, FIONREAD, &bytes_available);
+#endif
+
+        // Threshold: 2048 bytes (~2-4 packets depending on size)
+        // If we have more than this waiting in socket buffer, we are lagging.
+        if (bytes_available > 2048) {
+            is_lagging = true;
+        }
+
         // Pass COMPLETE packet (including header) to callback
         // audio_receiver.cpp will parse the header manually
         if (packet_callback_) {
-            packet_callback_(buffer, received, std::string(sender_ip), sender_port);
+            packet_callback_(buffer, received, std::string(sender_ip), sender_port, is_lagging);
         }
     }
+}
+
+bool UDPReceiver::sendTo(const void* data, size_t size, const std::string& ip, uint16_t port) {
+    if (socket_fd_ == INVALID_SOCKET) return false;
+    
+    struct sockaddr_in dest_addr;
+    memset(&dest_addr, 0, sizeof(dest_addr));
+    dest_addr.sin_family = AF_INET;
+    dest_addr.sin_port = htons(port);
+    dest_addr.sin_addr.s_addr = inet_addr(ip.c_str());
+    
+    int sent = sendto(socket_fd_, (const char*)data, size, 0, 
+                     (struct sockaddr*)&dest_addr, sizeof(dest_addr));
+                     
+    return sent == (int)size;
 }
 
 } // namespace moonmic

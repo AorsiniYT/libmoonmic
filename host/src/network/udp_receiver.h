@@ -21,7 +21,7 @@ struct PacketHeader {
 
 class UDPReceiver {
 public:
-    using PacketCallback = std::function<void(const uint8_t* data, size_t size, const std::string& sender_ip, uint16_t sender_port)>;
+    using PacketCallback = std::function<void(const uint8_t* data, size_t size, const std::string& sender_ip, uint16_t sender_port, bool is_lagging)>;
     
     UDPReceiver();
     ~UDPReceiver();
@@ -33,6 +33,9 @@ public:
     void setPacketCallback(PacketCallback callback) { packet_callback_ = callback; }
     
     void receiveLoop();
+    
+    // Send packet from the bound socket (thread-safe)
+    bool sendTo(const void* data, size_t size, const std::string& ip, uint16_t port);
     
 private:
     
