@@ -690,8 +690,25 @@ int main_gui(int argc, char* argv[]) {
     
     // Main loop
     while (!glfwWindowShouldClose(window) && g_running) {
-        glfwPollEvents();
+        // Calculate states for power management
+        // Note: We access previous frame stats here, which is fine
+        auto temp_stats = receiver.getStats();
+        bool is_active = temp_stats.is_receiving || g_debug_mode || g_update_available;
         
+        if (glfwGetWindowAttrib(window, GLFW_ICONIFIED)) {
+            // Minimized: Extremely low refresh (1Hz)
+            glfwWaitEventsTimeout(1.0);
+        } else if (is_active || debug_gui.isVisible()) {
+            // Active (Streaming or Debugging): High refresh (Target 60Hz)
+            // PollEvents prevents input lag, sleep yields CPU
+            glfwPollEvents();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        } else {
+             // Idle (Standing by): Low refresh (~10Hz) to save power
+             // Sufficient for status text updates
+             glfwWaitEventsTimeout(0.1);
+        }
+
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
