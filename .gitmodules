@@ -20,3 +20,6 @@
 [submodule "host/third_party/curl"]
 	path = host/third_party/curl
 	url = https://github.com/curl/curl.git
+[submodule "host/third_party/portaudio"]
+	path = host/third_party/portaudio
+	url = https://github.com/PortAudio/portaudio.git
