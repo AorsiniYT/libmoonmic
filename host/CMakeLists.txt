@@ -39,6 +39,9 @@ set(SOURCES
     src/display_manager.cpp
     src/version_checker.cpp
     src/debug_gui.cpp
+    src/guardian_state.cpp
+    src/guardian_launcher.cpp
+    src/gui_helper.cpp
 )
 
 
@@ -48,6 +51,8 @@ if(HOST_TARGET_WINDOWS OR (WIN32 AND NOT HOST_TARGET_LINUX))
     list(APPEND SOURCES
         src/platform/windows/virtual_device_win.cpp
         src/platform/windows/driver_installer.cpp
+        src/platform/windows/audio_utils.cpp
+        src/platform/windows/audio_device_manager.cpp
         src/platform/windows/resources.rc
     )
 elseif(HOST_TARGET_LINUX OR (UNIX AND NOT APPLE AND NOT HOST_TARGET_WINDOWS))
@@ -62,7 +67,7 @@ if(USE_IMGUI)
     set(IMGUI_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui)
     
     if(EXISTS ${IMGUI_DIR}/imgui.cpp)
-        list(APPEND SOURCES
+        set(IMGUI_SOURCES
             ${IMGUI_DIR}/imgui.cpp
             ${IMGUI_DIR}/imgui_draw.cpp
             ${IMGUI_DIR}/imgui_tables.cpp
@@ -70,6 +75,7 @@ if(USE_IMGUI)
             ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
             ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
         )
+        list(APPEND SOURCES ${IMGUI_SOURCES})
         add_definitions(-DUSE_IMGUI)
         
         # Include directories for ImGui will be added after target creation
@@ -139,6 +145,85 @@ else()
     message(STATUS "Using system CURL")
 endif()
 
+# ==========================================
+# Guardian Watchdog Executable (Windows only)
+# ==========================================
+if(HOST_TARGET_WINDOWS OR (WIN32 AND NOT HOST_TARGET_LINUX))
+    message(STATUS "Building moonmic-guardian watchdog executable")
+    
+    add_executable(moonmic-guardian
+        guardian/main.cpp
+        src/guardian_state.cpp
+        src/platform/windows/audio_device_manager.cpp
+    )
+    
+    target_include_directories(moonmic-guardian PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_BINARY_DIR}
+    )
+    
+    target_link_libraries(moonmic-guardian PRIVATE
+        ole32
+        oleaut32
+        advapi32
+        propsys
+        uuid
+        setupapi
+        ws2_32
+        winmm
+    )
+
+    # Use console subsystem and static linking
+    target_link_options(moonmic-guardian PRIVATE 
+        -mconsole
+        -static-libgcc
+        -static-libstdc++
+        -static
+    )
+
+    if(USE_IMGUI AND IMGUI_SOURCES)
+        target_sources(moonmic-guardian PRIVATE ${IMGUI_SOURCES})
+        target_include_directories(moonmic-guardian PRIVATE
+            ${IMGUI_DIR}
+            ${IMGUI_DIR}/backends
+        )
+        target_link_libraries(moonmic-guardian PRIVATE opengl32)
+    endif()
+    
+    # nlohmann/json (Header only)
+    set(JSON_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/json)
+    if(EXISTS ${JSON_DIR}/include/nlohmann/json.hpp)
+        target_include_directories(moonmic-guardian PRIVATE ${JSON_DIR}/include)
+    else()
+        message(FATAL_ERROR "nlohmann/json not found in ${JSON_DIR}")
+    endif()
+
+    # GLFW (Windows only)
+    if(HOST_TARGET_WINDOWS OR (WIN32 AND NOT HOST_TARGET_LINUX))
+        set(GLFW_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glfw)
+        if(EXISTS ${GLFW_DIR}/CMakeLists.txt)
+            set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+            set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+            set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+            set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
+            if(NOT TARGET glfw)
+                add_subdirectory(${GLFW_DIR} glfw)
+            endif()
+            target_link_libraries(moonmic-guardian PRIVATE glfw)
+        else()
+            message(FATAL_ERROR "GLFW not found in ${GLFW_DIR}")
+        endif()
+    endif()
+    
+    # Copy guardian to output directory next to moonmic-guardian
+    add_custom_command(TARGET moonmic-guardian POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy
+        $<TARGET_FILE:moonmic-guardian>
+        "${CMAKE_CURRENT_BINARY_DIR}/../../../host/windows/"
+        COMMENT "Copying moonmic-guardian.exe to output directory"
+    )
+endif()
+
 # Windows-specific system libraries for CURL with SChannel
 if(WIN32)
     # CURL requires Winsock, LDAP, and SChannel libraries for HTTPS
@@ -169,11 +254,13 @@ endif()
 if(HOST_TARGET_WINDOWS OR (WIN32 AND NOT HOST_TARGET_LINUX))
     set(GLFW_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glfw)
     if(EXISTS ${GLFW_DIR}/CMakeLists.txt)
-        set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
-        set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-        set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-        set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
-        add_subdirectory(${GLFW_DIR} glfw)
+        if(NOT TARGET glfw)
+            set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+            set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+            set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+            set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
+            add_subdirectory(${GLFW_DIR} glfw)
+        endif()
         target_link_libraries(moonmic-host PRIVATE glfw)
     else()
         message(FATAL_ERROR "GLFW not found in ${GLFW_DIR}")
@@ -240,6 +327,19 @@ else()
     endif()
 endif()
 
+# PortAudio (from third_party)
+if(HOST_TARGET_WINDOWS AND PORTAUDIO_LIBRARIES)
+    target_link_libraries(moonmic-host PRIVATE ${PORTAUDIO_LIBRARIES})
+    target_include_directories(moonmic-host PRIVATE ${PORTAUDIO_INCLUDE_DIRS})
+    target_compile_definitions(moonmic-host PRIVATE USE_PORTAUDIO)
+    message(STATUS "PortAudio integration enabled")
+    
+    # Add PortAudio implementation sources to the target
+    target_sources(moonmic-host PRIVATE
+        src/platform/portaudio/virtual_device_pa.cpp
+    )
+endif()
+
 
 # Platform-specific dependencies
 if(HOST_TARGET_WINDOWS OR (WIN32 AND NOT HOST_TARGET_LINUX))
@@ -248,6 +348,9 @@ if(HOST_TARGET_WINDOWS OR (WIN32 AND NOT HOST_TARGET_LINUX))
         winmm
         ole32
         propsys
+        setupapi
+        uuid        # For GUID/UUID references (IPolicyConfig)
+        oleaut32    # For SysAllocString/SysFreeString (BSTR operations)
     )
     
     # Use console subsystem so we can see stdout/stderr

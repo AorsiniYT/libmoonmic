@@ -20,13 +20,20 @@ struct Config {
     
     // Audio settings
     struct {
-        std::string virtual_device_name = "MoonMic Virtual Microphone";
         int stream_sample_rate = 16000;  // Sample rate of incoming stream (e.g., 16kHz from Vita)
-        int resampling_rate = 48000;  // Output sample rate (resample from stream to this)
-        int sample_rate = 48000;  // Deprecated: use resampling_rate instead
+        int resampling_rate = 0;  // Output sample rate (0 = auto-detect from device, or manual override)
+        int sample_rate = 0;  // Deprecated: use resampling_rate instead (0 = auto-detect)
         int channels = 1;
         int buffer_size_ms = 20;
         bool use_speaker_mode = false;  // true = play to speakers, false = send to VB-Cable
+        std::string driver_type = "VBCABLE"; // "VBCABLE", "STEAM"
+        std::string driver_device_name = "VB-Audio Virtual Cable"; // For Device Manager
+        std::string recording_endpoint_name = "CABLE Output"; // For Audio Mic Setting
+        
+        
+        bool auto_set_default_mic = true;  // Automatically set virtual device as default recording device
+        bool use_virtual_mic = true;  // true = use virtual mic (Steam/VBCable), false = use original physical mic
+        std::string original_mic_id;  // Backup of the original default mic ID for restoration
     } audio;
     
     // Security settings

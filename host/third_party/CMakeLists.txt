@@ -257,3 +257,48 @@ set(FFMPEG_LIBRARIES
 
 message(STATUS "FFmpeg will be built statically")
 message(STATUS "========================================")
+
+#==================================================================================
+# PortAudio Static Library Build
+#==================================================================================
+
+message(STATUS "=== PortAudio Static Build Configuration ===")
+set(PA_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/portaudio)
+
+if(NOT EXISTS "${PA_SOURCE_DIR}/CMakeLists.txt")
+    message(WARNING "PortAudio source not found at ${PA_SOURCE_DIR}")
+else()
+    # Configure PortAudio options
+    set(PA_BUILD_STATIC ON CACHE BOOL "" FORCE)
+    set(PA_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+    set(PA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(PA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    
+    if(WIN32)
+        set(PA_USE_WASAPI ON CACHE BOOL "" FORCE)
+        set(PA_USE_WDMKS ON CACHE BOOL "" FORCE)
+        set(PA_USE_DS OFF CACHE BOOL "" FORCE)
+        set(PA_USE_WMME OFF CACHE BOOL "" FORCE)
+        set(PA_USE_ASIO OFF CACHE BOOL "" FORCE)
+    else()
+        set(PA_USE_ALSA ON CACHE BOOL "" FORCE)
+        set(PA_USE_JACK OFF CACHE BOOL "" FORCE)
+        set(PA_USE_PULSEAUDIO OFF CACHE BOOL "" FORCE)
+    endif()
+
+    add_subdirectory(portaudio)
+    
+    # Export variables - Detect correct target name
+    if(TARGET portaudio_static)
+        set(PORTAUDIO_LIBRARIES portaudio_static PARENT_SCOPE)
+    elseif(TARGET portaudio)
+        set(PORTAUDIO_LIBRARIES portaudio PARENT_SCOPE)
+    else()
+        message(WARNING "PortAudio target not found!")
+    endif()
+
+    set(PORTAUDIO_INCLUDE_DIRS ${PA_SOURCE_DIR}/include PARENT_SCOPE)
+    
+    message(STATUS "PortAudio configured (WDM-KS + WASAPI enabled)")
+endif()
+message(STATUS "==========================================")

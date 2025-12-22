@@ -9,6 +9,10 @@
 #include <iostream>
 #include <cstring>
 
+#ifdef _WIN32
+#include "platform/windows/audio_utils.h"
+#endif
+
 namespace moonmic {
 
 AudioReceiver::AudioReceiver()
@@ -50,7 +54,7 @@ void AudioReceiver::resetConnectionState() {
         
         virtual_device_ = VirtualDevice::create(); // Create fresh instance
         
-        std::string output_device = config_.audio.use_speaker_mode ? "" : config_.audio.virtual_device_name;
+        std::string output_device = config_.audio.use_speaker_mode ? "" : config_.audio.recording_endpoint_name;
         
         // Re-init with same params
         if (!virtual_device_->init(output_device, 48000, config_.audio.channels)) {
@@ -80,26 +84,17 @@ bool AudioReceiver::start(const Config& config) {
     // Note: Sunshine whitelist sync is not currently implemented
     // Whitelist checking would need client UUIDs sent in packets
     
-    // Initialize FFmpeg Opus decoder at configured output rate
-    // This will match VB-Cable's rate (can be 16kHz or 48kHz from GUI)
-    decoder_ = std::make_unique<FFmpegDecoder>();
-    if (!decoder_->init(config_.audio.resampling_rate, config_.audio.channels)) {
-        std::cerr << "[AudioReceiver] Failed to initialize FFmpeg Opus decoder" << std::endl;
-        return false;
-    }
-    std::cout << "[AudioReceiver] FFmpeg Opus decoder initialized at " << config_.audio.resampling_rate << "Hz" << std::endl;
+    config_ = config;
     
-    // Only initialize resampler if we need it (stream rate != output rate)
-    // For Vita@16kHz -> VB-Cable@16kHz, no resampling needed
-    // For Vita@16kHz -> VB-Cable@48kHz, use Speex resampler
-    resampler_ = nullptr;  // Will be created on-demand when stream rate is detected
+    // Note: Sunshine whitelist sync is not currently implemented
+    // Whitelist checking would need client UUIDs sent in packets
     
-    // Initialize audio output device
+    // Initialize audio output device FIRST to detect system sample rate
     // Speaker mode: use default system speakers (empty device name)
     // Normal mode: use VB-Cable virtual microphone
     virtual_device_ = VirtualDevice::create();
-    std::string output_device = config_.audio.use_speaker_mode ? "" : config_.audio.virtual_device_name;
-    std::string output_mode = config_.audio.use_speaker_mode ? "speakers (debug)" : "VB-Cable (microphone)";
+    std::string output_device = config_.audio.use_speaker_mode ? "" : config_.audio.recording_endpoint_name;
+    std::string output_mode = config_.audio.use_speaker_mode ? "speakers (debug)" : config_.audio.recording_endpoint_name;
     
     // Initialize with a dummy rate - VirtualDevice will use system's native format
     if (!virtual_device_->init(
@@ -115,6 +110,28 @@ bool AudioReceiver::start(const Config& config) {
     system_sample_rate_ = virtual_device_->getSampleRate();
     std::cout << "[AudioReceiver] Audio output: " << output_mode 
               << " @ " << system_sample_rate_ << "Hz (auto-detected)" << std::endl;
+              
+    // Determine decoder output rate
+    // If config has specific rate (non-zero), use it. Otherwise use detected system rate.
+    int decoder_rate = (config_.audio.resampling_rate > 0) ? config_.audio.resampling_rate : system_sample_rate_;
+    
+    // Initialize FFmpeg Opus decoder at the determined rate
+    decoder_ = std::make_unique<FFmpegDecoder>();
+    if (!decoder_->init(decoder_rate, config_.audio.channels)) {
+        std::cerr << "[AudioReceiver] Failed to initialize FFmpeg Opus decoder" << std::endl;
+        return false;
+    }
+    std::cout << "[AudioReceiver] FFmpeg Opus decoder initialized at " << decoder_rate << "Hz" << std::endl;
+    
+    // Update config with actual rate if it was auto (0) so other parts of code know
+    if (config_.audio.resampling_rate == 0) {
+        config_.audio.resampling_rate = decoder_rate;
+    }
+    
+    // Only initialize resampler if we need it (stream rate != output rate)
+    // For Vita@16kHz -> VB-Cable@16kHz, no resampling needed
+    // For Vita@16kHz -> VB-Cable@48kHz, use Speex resampler
+    resampler_ = nullptr;  // Will be created on-demand when stream rate is detected
     
     // Initialize UDP receiver
     receiver_ = std::make_unique<UDPReceiver>();
@@ -167,6 +184,18 @@ void AudioReceiver::stop() {
         connection_monitor_->stop();
         connection_monitor_.reset();
     }
+    
+#ifdef _WIN32
+    // Restore original default microphone
+    if (!config_.audio.original_mic_id.empty()) {
+        std::cout << "[AudioReceiver] Restoring original default microphone..." << std::endl;
+        if (moonmic::platform::windows::SetDefaultRecordingDevice(config_.audio.original_mic_id)) {
+            std::cout << "[AudioReceiver] Original microphone restored successfully" << std::endl;
+        }
+        config_.audio.original_mic_id = "";  // Clear after restoration
+        config_.save(Config::getDefaultConfigPath());  // Persist the cleared ID
+    }
+#endif
     
     std::cout << "[AudioReceiver] Stopped" << std::endl;
 }
@@ -253,7 +282,7 @@ bool AudioReceiver::switchAudioOutput(bool use_speakers) {
     config_.audio.use_speaker_mode = use_speakers;
     
     // Create new virtual device using factory
-    std::string output_device = use_speakers ? "" : config_.audio.virtual_device_name;
+    std::string output_device = use_speakers ? "" : config_.audio.driver_device_name;
     std::string output_mode = use_speakers ? "speakers (debug)" : "VB-Cable (microphone)";
     
     virtual_device_ = VirtualDevice::create();
@@ -471,13 +500,16 @@ void AudioReceiver::onPacketReceived(const uint8_t* data, size_t size, const std
         std::cout << "[AudioReceiver] Output sample rate: " << system_sample_rate_ << " Hz" << std::endl;
         std::cout << "[AudioReceiver] Mode: " << (is_raw_mode ? "RAW PCM" : "Opus") << std::endl;
         
-        if (stream_rate != system_sample_rate_) {
-            // Create resampler for stream_rate -> system_sample_rate_
+        if (!resampler_ || stream_rate != detected_stream_rate_) {
+            // Create/Recreate resampler
+            // ALWAYS create it, even if rates match, to support Drift Correction
             int err = 0;
+            if (resampler_) speex_resampler_destroy(resampler_);
+            
             resampler_ = speex_resampler_init(
                 config_.audio.channels,
-                stream_rate,           // Input rate (16kHz from Vita)
-                system_sample_rate_,   // Output rate (48kHz/96kHz system)
+                stream_rate,           // Input rate 
+                system_sample_rate_,   // Output rate
                 10,                     // Quality (0-10, 10 = best)
                 &err
             );
@@ -487,12 +519,11 @@ void AudioReceiver::onPacketReceived(const uint8_t* data, size_t size, const std
                 return;
             }
             
-            std::cout << "[AudioReceiver] ✓ Resampler created: " << stream_rate << "Hz → " 
+            std::cout << "[AudioReceiver] ✓ Resampler active: " << stream_rate << "Hz → " 
                       << system_sample_rate_ << "Hz (quality 10)" << std::endl;
-            std::cout << "[AudioReceiver] Resampling: " << stream_rate << "Hz → " 
-                      << system_sample_rate_ << "Hz (Speex resampler)" << std::endl;
-        } else {
-            std::cout << "[AudioReceiver] No resampling needed (rates match)" << std::endl;
+            if (stream_rate == system_sample_rate_) {
+                std::cout << "[AudioReceiver] (Resampler enabled for Drift Correction)" << std::endl;
+            }
         }
         std::cout << "[AudioReceiver] ═══════════════════════\n" << std::endl;
     }
@@ -512,18 +543,7 @@ void AudioReceiver::onPacketReceived(const uint8_t* data, size_t size, const std
         
         // DEBUG: Log first packet's sample values
         static bool first_raw_logged = false;
-        if (!first_raw_logged) {
-            first_raw_logged = true;
-            std::cout << "[AudioReceiver] RAW MODE DEBUG:" << std::endl;
-            std::cout << "  Payload size: " << payload_size << " bytes" << std::endl;
-            std::cout << "  Num samples: " << num_samples << std::endl;
-            std::cout << "  Output frames: " << output_frames << std::endl;
-            std::cout << "  First 10 int16 samples:";
-            for (int i = 0; i < 10 && i < num_samples; i++) {
-                std::cout << " " << pcm_int16[i];
-            }
-            std::cout << std::endl;
-        }
+        if (!first_raw_logged) first_raw_logged = true;
         
         // Convert int16 to float
         // CRITICAL: Divide by 32768.0f (not 32767.0f) for correct normalization
@@ -531,17 +551,84 @@ void AudioReceiver::onPacketReceived(const uint8_t* data, size_t size, const std
             decode_buffer_[i] = (float)pcm_int16[i] / 32768.0f;
         }
         
-        // Apply resampling if stream rate != system rate
-        if (system_sample_rate_ != detected_stream_rate_ && resampler_) {
+        // Apply resampling / Drift Correction
+        // Always enter if resampler exists (which is now always true)
+        if (resampler_) {
+            
+            // --- DRIFT CORRECTION LOGIC (Aggressive P-Controller) ---
+            // The Steam driver can drift by 1000Hz+ at 44100Hz.
+            static int packet_counter = 0;
+            if (++packet_counter % 10 == 0) { // Check every ~100-300ms (10 packets)
+                float usage = virtual_device_->getBufferUsage();
+                
+                spx_uint32_t in_rate, out_rate;
+                speex_resampler_get_rate(resampler_, &in_rate, &out_rate);
+                
+                uint32_t base_rate = system_sample_rate_;
+                
+                // Target: 50% buffer usage.
+                float error = usage - 0.5f; // Positive = Too Full (Slow Driver), Negative = Too Empty (Fast Driver)
+                
+                // Deadzone of 5% (0.45 - 0.55)
+                if (std::abs(error) > 0.05f) {
+                    // P-Controller Gain
+                    // If error is 0.4 (Usage 0.9), correction should be massive (e.g. -2000Hz)
+                    // If error is 0.1 (Usage 0.6), correction moderate (e.g. -500Hz)
+                    const int Kp = 5000;
+                    
+                    int correction = (int)(error * Kp);
+                    
+                    // Logic:
+                    // If Buffer Full (Error > 0), we want FEWER samples.
+                    // To get FEWER outputs, we DECREASE the output rate.
+                    // (Ratio = Out/In. Lower Ratio = Fewer Outs).
+                    // So NewRate = BaseRate - Correction.
+                    
+                    int target_rate = (int)base_rate - correction;
+                    
+                    // Limit max deviation to avoid pitch shifting too wildy (+/- 4000Hz)
+                    if (target_rate > (int)base_rate + 4000) target_rate = base_rate + 4000;
+                    if (target_rate < (int)base_rate - 4000) target_rate = base_rate - 4000;
+                    
+                    // Only apply if meaningful change (>10Hz difference from current)
+                    if (std::abs(target_rate - (int)out_rate) > 10) {
+                         // std::cout << "[AudioReceiver] Drift P-Control: Usage=" << usage << " Err=" << error << " Adj=" << correction << " NewRate=" << target_rate << std::endl;
+                         speex_resampler_set_rate(resampler_, in_rate, (spx_uint32_t)target_rate);
+                    }
+                }
+            }
+            // ------------------------------
+        
             spx_uint32_t in_len = output_frames;
+
+#ifdef _WIN32
+            // Auto-set Default Mic Logic - triggered when stream starts (first packet)
+            // We check this here because this is where we know audio is flowing
+            std::string currentId, currentName;
+            if (moonmic::platform::windows::GetDefaultRecordingDevice(currentId, currentName)) {
+                // Check if current device is NOT our virtual device to avoid overwriting original with self
+                std::string virtualId = moonmic::platform::windows::FindRecordingDeviceID(config_.audio.recording_endpoint_name);
+                
+                if (currentId != virtualId) {
+                    std::cout << "[AudioReceiver] Saving original default mic: " << currentName << " (" << currentId << ")" << std::endl;
+                    config_.audio.original_mic_id = currentId;
+                    
+                    // Save config immediately to persist backup ID in case of crash
+                    config_.save(Config::getDefaultConfigPath());
+                    
+                    // Set new default
+                    if (moonmic::platform::windows::SetDefaultRecordingDevice(config_.audio.recording_endpoint_name)) {
+                        std::cout << "[AudioReceiver] Auto-set default mic to: " << config_.audio.recording_endpoint_name << std::endl;
+                    }
+                }
+            }
+#endif
+
             spx_uint32_t out_len = MAX_FRAMES;
             
-            // Debug: log first resample operation
+            // Debug: log first resample operation (REMOVED)
             static bool first_resample_logged = false;
-            if (!first_resample_logged) {
-                first_resample_logged = true;
-                std::cout << "[AudioReceiver] RAW RESAMPLE: " << in_len << " frames → ";
-            }
+            if (!first_resample_logged) first_resample_logged = true;
             
             int err = speex_resampler_process_float(
                 resampler_,
@@ -553,7 +640,7 @@ void AudioReceiver::onPacketReceived(const uint8_t* data, size_t size, const std
             );
             
             if (!first_resample_logged) {
-                std::cout << out_len << " frames" << std::endl;
+                // std::cout << out_len << " frames" << std::endl; // Removed
                 first_resample_logged = true;
             }
             
@@ -626,6 +713,23 @@ void AudioReceiver::onPacketReceived(const uint8_t* data, size_t size, const std
                               << "Hz (Speex)" << std::endl;
                 }
             }
+        }
+    }
+    
+    // STEAM WDM-KS FIX: Pre-attenuation to compensate for driver's internal AGC
+    // The Steam driver with WDM-KS has automatic gain that amplifies everything to maximum.
+    // VB-Cable (WASAPI) doesn't have this issue, so it's driver-specific.
+    // Apply 15% attenuation (0.15x) so that after the driver's AGC, audio is at normal levels.
+    if (config_.audio.recording_endpoint_name.find("Steam") != std::string::npos) {
+        static bool attenuation_logged = false;
+        if (!attenuation_logged) {
+            std::cout << "[AudioReceiver] Steam WDM-KS detected: applying 15% pre-attenuation to compensate for driver AGC" << std::endl;
+            attenuation_logged = true;
+        }
+        
+        const float STEAM_ATTENUATION = 0.15f;  // 15% of original volume (lower = quieter input, less noise)
+        for (size_t i = 0; i < output_frames * config_.audio.channels; i++) {
+            output_buffer[i] *= STEAM_ATTENUATION;
         }
     }
     

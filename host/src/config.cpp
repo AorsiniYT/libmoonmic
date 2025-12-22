@@ -40,13 +40,26 @@ bool Config::load(const std::string& path) {
         // Load audio settings
         if (j.contains("audio")) {
             auto& a = j["audio"];
-            if (a.contains("virtual_device_name")) audio.virtual_device_name = a["virtual_device_name"];
             if (a.contains("stream_sample_rate")) audio.stream_sample_rate = a["stream_sample_rate"];
             if (a.contains("resampling_rate")) audio.resampling_rate = a["resampling_rate"];
             if (a.contains("sample_rate")) audio.sample_rate = a["sample_rate"];  // Backward compat
             if (a.contains("channels")) audio.channels = a["channels"];
             if (a.contains("buffer_size_ms")) audio.buffer_size_ms = a["buffer_size_ms"];
             if (a.contains("use_speaker_mode")) audio.use_speaker_mode = a["use_speaker_mode"];
+            if (a.contains("driver_device_name")) audio.driver_device_name = a["driver_device_name"];
+            if (a.contains("recording_endpoint_name")) audio.recording_endpoint_name = a["recording_endpoint_name"];
+            
+            // Migration from old config
+            if (a.contains("virtual_device_name")) {
+                 // If old config exists but new ones don't, assume it was VB-Cable default logic
+                 if (audio.driver_type == "VBCABLE" && audio.recording_endpoint_name == "CABLE Output") {
+                     // Keep default
+                 }
+            }
+
+            if (a.contains("driver_type")) audio.driver_type = a["driver_type"];
+            if (a.contains("auto_set_default_mic")) audio.auto_set_default_mic = a["auto_set_default_mic"];
+            if (a.contains("original_mic_id")) audio.original_mic_id = a["original_mic_id"];
         }
         
         // Load security settings
@@ -98,13 +111,17 @@ bool Config::save(const std::string& path) {
         j["server"]["port"] = server.port;
         j["server"]["bind_address"] = server.bind_address;
         
-        j["audio"]["virtual_device_name"] = audio.virtual_device_name;
         j["audio"]["stream_sample_rate"] = audio.stream_sample_rate;
         j["audio"]["resampling_rate"] = audio.resampling_rate;
         j["audio"]["sample_rate"] = audio.sample_rate;  // Deprecated, for backward compat
         j["audio"]["channels"] = audio.channels;
         j["audio"]["buffer_size_ms"] = audio.buffer_size_ms;
         j["audio"]["use_speaker_mode"] = audio.use_speaker_mode;
+        j["audio"]["driver_device_name"] = audio.driver_device_name;
+        j["audio"]["recording_endpoint_name"] = audio.recording_endpoint_name;
+        j["audio"]["driver_type"] = audio.driver_type;
+        j["audio"]["auto_set_default_mic"] = audio.auto_set_default_mic;
+        j["audio"]["original_mic_id"] = audio.original_mic_id;
         
         j["security"]["enable_whitelist"] = security.enable_whitelist;
         j["security"]["sync_with_sunshine"] = security.sync_with_sunshine;

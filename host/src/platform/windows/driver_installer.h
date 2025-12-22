@@ -13,49 +13,51 @@ class DriverInstaller {
 public:
     DriverInstaller();
     
-    /**
-     * @brief Check if VB-CABLE driver is installed
-     * @return true if installed
-     */
-    bool isVBCableInstalled();
-    
-    /**
-     * @brief Get VB-CABLE Input device name (for writing audio)
-     * @return Device name or empty if not found
-     */
+    // Check for VBCable devices
     std::string getVBCableInputDevice();
-    
-    /**
-     * @brief Get VB-CABLE Output device name (virtual mic)
-     * @return Device name or empty if not found
-     */
     std::string getVBCableOutputDevice();
     
-    /**
-     * @brief Install VB-CABLE driver (requires admin)
-     * @return true if installation successful
-     */
-    bool installDriver();
-    
-    /**
-     * @brief Check if running with administrator privileges
-     * @return true if admin
-     */
+    // Check if running with Admin privileges
     static bool isRunningAsAdmin();
     
-    /**
-     * @brief Restart application with admin privileges
-     * @return true if restart initiated
-     */
+    // Request restart as Admin
     static bool restartAsAdmin();
+
+    // Check if VB-CABLE driver is installed
+    bool isVBCableInstalled();
+    
+    // Check if Steam Streaming Speakers/Microphone driver is installed
+    bool isSteamSpeakersInstalled();
+    
+    // Check if ANY compatible driver is installed
+    bool isAnyDriverInstalled();
+    
+    // Install VB-CABLE driver (extracts embedded installer)
+    bool installVBCable();
+    
+    // Uninstall VB-CABLE driver
+    bool uninstallVBCable();
+    
+    // Install Steam Streaming Speakers/Microphone driver (requires external files)
+    bool installSteamSpeakers();
+
+    // Uninstall Steam Streaming Speakers/Microphone driver
+    bool uninstallSteamSpeakers();
     
 private:
     std::string driver_path_;
     
-    bool runSetupExecutable();
-    bool enumerateAudioDevices();
-    bool extractEmbeddedInstaller(const std::string& temp_dir);
+    // Helper to extract embedded resource
     bool extractResourceToFile(const char* resource_name, const std::string& output_path);
+    
+    // Helper to extract Steam drivers
+    bool extractEmbeddedSteamDriver(const std::string& temp_dir, bool is_x64);
+    
+    // Helper to extract and run embedded installer
+    bool runSetupExecutable(bool uninstall = false);
+    
+    // Helper to extract embedded installer files
+    bool extractEmbeddedInstaller(const std::string& temp_dir);
     void cleanupTempDir(const std::string& temp_dir);
 };
 

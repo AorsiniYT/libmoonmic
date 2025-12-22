@@ -192,13 +192,19 @@ static void* moonmic_worker_thread(void* arg) {
         
         // RAW mode: send immediately without accumulation
         if (client->config.raw_mode) {
+            // Apply gain (read dynamically from config for slider changes)
+            const float GAIN = client->config.gain;
+            for (int i = 0; i < frames_read * client->config.channels; i++) {
+                pcm_buffer[i] *= GAIN;
+                // Clamp after gain
+                if (pcm_buffer[i] > 1.0f) pcm_buffer[i] = 1.0f;
+                if (pcm_buffer[i] < -1.0f) pcm_buffer[i] = -1.0f;
+            }
+            
             // Convert float to int16 for transmission
             int16_t* pcm_int16 = (int16_t*)(opus_buffer + MOONMIC_HEADER_SIZE);
             for (int i = 0; i < frames_read * client->config.channels; i++) {
-                float sample = pcm_buffer[i];
-                if (sample > 1.0f) sample = 1.0f;
-                if (sample < -1.0f) sample = -1.0f;
-                pcm_int16[i] = (int16_t)(sample * 32767.0f);
+                pcm_int16[i] = (int16_t)(pcm_buffer[i] * 32767.0f);
             }
             int encoded_bytes = frames_read * client->config.channels * sizeof(int16_t);
             uint32_t packet_sample_rate = client->config.sample_rate | MOONMIC_RAW_FLAG;
@@ -244,7 +250,8 @@ static void* moonmic_worker_thread(void* arg) {
         
         // Apply gain to samples (BEFORE encoding)
         // This is critical because Vita microphone has very low volume
-        // Gain from config (default: 10.0x, adjustable 1.0-100.0 in GUI)
+        // Read gain from config EVERY frame to allow dynamic adjustment
+        // (User can change gain via UI slider without reconnecting)
         const float GAIN = client->config.gain;
         
         for (int i = 0; i < samples_to_copy; i++) {

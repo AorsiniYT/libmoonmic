@@ -19,6 +19,9 @@ public:
     virtual void close() = 0;
     virtual int getSampleRate() const = 0;  // Get actual device sample rate
     
+    // Returns buffer usage fraction (0.0 to 1.0). Default 0.0 for non-buffered devices.
+    virtual float getBufferUsage() const { return 0.0f; }
+    
     static std::unique_ptr<VirtualDevice> create();
 };
 
