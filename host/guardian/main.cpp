@@ -229,15 +229,48 @@ int main(int argc, char* argv[]) {
         // Monitoring Logic
         if (ui.mode == GuardianMode::MONITORING) {
             if (!platform::isProcessAlive(targetPid)) {
-                // Host died! Read state and show window
+                // Host died!
+                
+#ifdef _WIN32
+                // Check if it was a normal shutdown
+                bool normalShutdown = false;
+                HANDLE hEvent = OpenEventA(SYNCHRONIZE, FALSE, "Global\\MoonMicHostShutdown");
+                if (hEvent) {
+                    if (WaitForSingleObject(hEvent, 0) == WAIT_OBJECT_0) {
+                        normalShutdown = true;
+                    }
+                    CloseHandle(hEvent);
+                }
+
+                if (normalShutdown) {
+                    // Normal exit: Restore silently if needed and exit
+                    if (GuardianStateManager::readState(ui.state)) {
+                        // Restore silently
+                        platform::restoreMicrophone(ui.state.original_mic_id);
+                        GuardianStateManager::deleteState();
+                    }
+                    ui.shouldExit = true;
+                } else {
+                    // Crash detected: Read state and show window
+                    if (GuardianStateManager::readState(ui.state)) {
+                        ui.mode = GuardianMode::CRASH_DETECTED;
+                        ui.windowVisible = true;
+                        glfwShowWindow(window);
+                    } else {
+                        // No state to restore, just exit
+                        ui.shouldExit = true;
+                    }
+                }
+#else
+                // Linux: Just check state for now
                 if (GuardianStateManager::readState(ui.state)) {
                     ui.mode = GuardianMode::CRASH_DETECTED;
                     ui.windowVisible = true;
                     glfwShowWindow(window);
                 } else {
-                    // No state to restore, just exit
                     ui.shouldExit = true;
                 }
+#endif
             }
         }
 

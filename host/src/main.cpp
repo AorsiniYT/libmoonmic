@@ -1186,6 +1186,11 @@ int main_gui(int argc, char* argv[]) {
     receiver.stop();
     
 #ifdef _WIN32
+    // Signal normal shutdown to guardian
+    GuardianLauncher::signalNormalShutdown();
+#endif
+    
+#ifdef _WIN32
     // Disable driver on exit
     if (config.audio.auto_set_default_mic) {
         if (moonmic::platform::windows::IsRunningAsAdmin()) {
@@ -1308,6 +1313,11 @@ int main_console(int argc, char* argv[]) {
     }
     
     receiver.stop();
+
+#ifdef _WIN32
+    // Signal normal shutdown to guardian
+    GuardianLauncher::signalNormalShutdown();
+#endif
     std::cout << "[Main] Shutdown complete" << std::endl;
     
     return 0;
