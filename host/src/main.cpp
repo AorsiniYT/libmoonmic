@@ -190,18 +190,23 @@ void renderGUI(GLFWwindow* window, AudioReceiver& receiver, SunshineIntegration&
         }
         
         // CRITICAL: Restart receiver with new device configuration
+        // First, ensure the selected device is Enabled in Windows
+        moonmic::platform::windows::ChangeDeviceState(config.audio.driver_device_name, true);
+        
+        // Restart logic: Stop if running, then Start (Force start when switching drivers)
         if (receiver.isRunning()) {
             std::cout << "[Main] Switching to " << driver_names[selected_driver] << ", restarting receiver..." << std::endl;
             receiver.stop();
-            
             // Brief pause to ensure clean shutdown
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            
-            if (receiver.start(config)) {
-                std::cout << "[Main] Receiver restarted successfully with new driver" << std::endl;
-            } else {
-                std::cerr << "[Main] Failed to restart receiver with new driver" << std::endl;
-            }
+        } else {
+             std::cout << "[Main] Driver switched, attempting to start receiver..." << std::endl;
+        }
+
+        if (receiver.start(config)) {
+            std::cout << "[Main] Receiver restarted successfully with new driver" << std::endl;
+        } else {
+            std::cerr << "[Main] Failed to restart receiver with new driver" << std::endl;
         }
     }
     

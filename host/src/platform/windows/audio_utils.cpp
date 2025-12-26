@@ -118,7 +118,7 @@ bool ChangeDeviceState(const std::string& name, bool enable) {
                                             &DataT, (PBYTE)friendlyName, sizeof(friendlyName), NULL)) {
             
             // Log every device we check to debug why Steam isn't found
-            std::cout << "[AudioUtils] Checking device: " << friendlyName << std::endl;
+            // std::cout << "[AudioUtils] Checking device: " << friendlyName << std::endl; (Removed per user request)
              
             if (std::string(friendlyName).find(name) != std::string::npos) {
                 // Found match
