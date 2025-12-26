@@ -11,6 +11,14 @@ namespace moonmic {
 
 /**
  * @brief Guardian process launcher and manager
+ * 
+ * The Guardian is a separate watchdog process (moonmic-guardian.exe) that monitors the host.
+ * If the host process terminates unexpectedly (crash), the Guardian detects the exit code
+ * and automatically restores the user's original default microphone.
+ * 
+ * Communication uses named Windows Events (Local\ namespace):
+ * - Shutdown Event: Host signals normal exit. Guardian ignores exit.
+ * - Restart Event: Host signals restart request. Guardian restarts Host.
  */
 class GuardianLauncher {
 public:

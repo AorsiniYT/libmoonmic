@@ -45,7 +45,7 @@ moonmic-host → PulseAudio → null-sink → Applications
 ### Windows
 
 - Windows 10/11 (x64 or ARM64)
-- VB-CABLE driver (included in `driver/` folder)
+- Virtual Audio Driver (Steam Streaming Mic or VB-CABLE - included)
 - Opus library
 - GLFW (for GUI)
 
@@ -170,28 +170,49 @@ moonmic-host validates clients using the **PairStatus handshake protocol**:
 
 **Important**: The host does NOT query `sunshine_state.json` or Sunshine APIs for validation. All validation is based on the PairStatus sent by the client in the handshake packet.
 
-## VB-CABLE Driver (Windows)
+## Virtual Audio Drivers
 
-### What is VB-CABLE?
+moonmic-host supports two virtual audio drivers:
 
-VB-CABLE creates a virtual audio cable with two endpoints:
-- **CABLE Input** (Playback Device) - Where moonmic-host writes audio
-- **CABLE Output** (Recording Device) - Virtual microphone that apps capture
+### 1. Steam Streaming Microphone (Recommended)
+- **Low Latency**: Uses kernel-level WDM-KS streaming.
+- **Reliable**: Designed by Valve for streaming.
+- **Embedded**: Installer files extracted automatically.
 
-### Installation
+### 2. VB-CABLE (Alternative)
+- **Universal compatibility**: Works as standard Windows audio device.
+- **Embedded**: Installer files extracted automatically.
 
-Included in `driver/` folder:
-- `VBCABLE_Setup_x64.exe` - Windows 64-bit installer
-- `VBCABLE_Setup.exe` - Windows 32-bit installer
-- Driver files (.sys, .inf, .cat)
+### Driver Manager
+The built-in **Driver Manager** allows you to:
+- Install/Uninstall drivers with one click.
+- Switch between Steam and VB-CABLE drivers instantly.
+- Monitor driver status.
+
+## Guardian Watchdog
+
+moonmic-host includes a dedicated watchdog process (`moonmic-guardian`) that:
+- Monitors the main application for crashes.
+- Automatically restarts the host if it fails.
+- **Critical**: Restores your original default microphone setting if the host crashes unexpectedly.
+
+## Installation
+
+### Windows (Standalone)
+```bash
+# Run the executable
+moonmic-host.exe
+```
+
+1. Click **"Driver Manager"** in the GUI.
+2. Click **"Install Steam Streaming Microphone"** (Recommended).
+3. Follow prompts (Admin rights required).
+4. **Reboot** if prompted.
 
 ### Verification
-
-After installation and reboot:
-
-1. Open **Sound Settings**
-2. **Output devices**: Should show "CABLE Input (VB-Audio Virtual Cable)"
-3. **Input devices**: Should show "CABLE Output (VB-Audio Virtual Cable)"
+After installation:
+1. Windows Sound Control Panel -> Recording tab.
+2. Verify "Microphone (Steam Streaming Microphone)" exists.
 
 ### Using Virtual Microphone
 
@@ -239,13 +260,11 @@ Package structure:
 ```
 moonmic-host-windows/
 ├── moonmic-host.exe
-├── moonmic-host.json (default config)
-├── driver/
-│   ├── README.md
-│   ├── VBCABLE_Setup_x64.exe
-│   └── ... (VB-CABLE files)
+├── moonmic-host.json (generated on first run)
 └── README.md
 ```
+
+**Note**: Drivers (VB-CABLE and Steam Mic) are embedded inside `moonmic-host.exe` and extracted automatically when needed.
 
 ## Troubleshooting
 
@@ -253,7 +272,7 @@ moonmic-host-windows/
 
 ```
 [VirtualDevice] VB-CABLE not detected
-[VirtualDevice] Please install VB-CABLE from driver/ folder
+[VirtualDevice] Please install driver via Driver Manager
 ```
 
 **Solution**: Run `moonmic-host --install-driver` and reboot.
@@ -308,6 +327,8 @@ Part of vita-moonlight project.
 
 ## Credits
 
+- **Valve Corporation** - Steam Streaming Microphone Driver
 - **VB-Audio Software** - VB-CABLE virtual audio driver
 - **Dear ImGui** - GUI library
 - **Xiph.Org** - Opus codec
+- **AorsiniYT** - moonmic-host application

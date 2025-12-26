@@ -1274,9 +1274,17 @@ int main_gui(int argc, char* argv[]) {
         std::string driverName = config.audio.driver_device_name;
         if (!driverName.empty()) {
              // Only try to enable if it looks like a driver we manage
-             if (driverName.find("Steam") != std::string::npos || driverName.find("VB-") != std::string::npos) {
+             bool isSteam = (driverName.find("Steam") != std::string::npos);
+             if (isSteam || driverName.find("VB-") != std::string::npos) {
                  std::cout << "[Main] Ensuring driver is enabled: " << driverName << std::endl;
                  moonmic::platform::windows::ChangeDeviceState(driverName, true);
+                 
+                 // If using Steam driver, double-check that the "Speakers" endpoint is disabled
+                 // This handles cases where installation might have missed it or PnP wasn't ready
+                 if (isSteam) {
+                     DriverInstaller installer;
+                     installer.disableSteamStreamingSpeakers();
+                 }
              }
         }
     }

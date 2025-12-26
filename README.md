@@ -62,18 +62,20 @@ libmoonmic/
     ├── CMakeLists.txt
     ├── README.md
     ├── QUICKSTART.md
-    ├── driver/                  # VB-CABLE driver (Windows)
+    ├── drivers/                 # Virtual audio drivers
+    │   ├── SVACDriver/          # Steam Streaming Mic (Recommended)
+    │   └── vbaudio/             # VB-CABLE driver (Alternative)
+    ├── guardian/                # Watchdog process
+    │   └── main.cpp
     └── src/
         ├── main.cpp
+        ├── guardian_launcher.cpp # Watchdog launcher
         ├── config.cpp
         ├── audio_receiver.cpp
-        ├── network/
-        │   ├── udp_receiver.cpp
-        │   └── connection_monitor.cpp   # Host ping sender
-        ├── codec/
-        │   └── ffmpeg_decoder.cpp
         ├── platform/
         │   ├── windows/
+        │   │   ├── driver_installer.cpp
+        │   │   └── audio_utils.cpp
         │   └── linux/
         └── ...
 ```
@@ -220,7 +222,7 @@ make
 
 | Platform | Status | Virtual Device |
 |----------|--------|----------------|
-| Windows | ✅ Implemented | VB-CABLE |
+| Windows | ✅ Implemented | Steam Streaming Mic (Recommended), VB-CABLE |
 | Linux | ✅ Implemented | PulseAudio |
 
 ## Dependencies
@@ -237,7 +239,8 @@ make
 - **GLFW** (GUI, optional)
 - **Dear ImGui** (GUI, optional)
 - **nlohmann/json** (configuration)
-- **VB-CABLE** (Windows virtual microphone)
+- **Steam Streaming Microphone** (Preferred low-latency driver)
+- **VB-CABLE** (Alternative virtual microphone)
 
 ## Building
 
@@ -262,7 +265,7 @@ make
 
 - [INTEGRATION.md](INTEGRATION.md) - Integration guide for vita-moonlight
 - [host/README.md](host/README.md) - Host application documentation
-- [host/driver/README.md](host/driver/README.md) - VB-CABLE driver guide
+- [host/drivers/README.md](host/drivers/README.md) - Virtual Audio Drivers guide (Steam & VB-CABLE)
 
 ## Use Cases
 
@@ -290,9 +293,11 @@ Contributions welcome! To add a new platform:
 
 ## Credits
 
+- **Valve Corporation** - Steam Streaming Microphone Driver
 - **VB-Audio Software** - VB-CABLE virtual audio driver
 - **Xiph.Org** - Opus audio codec
 - **Dear ImGui** - Immediate mode GUI library
+- **AorsiniYT** - moonmic-host application and integration
 
 ## Support
 

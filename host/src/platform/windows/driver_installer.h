@@ -1,6 +1,6 @@
 /**
  * @file driver_installer.h
- * @brief VB-CABLE driver installer for Windows
+ * @brief Audio Driver Installer and Manager (VB-CABLE & Steam Streaming Mic)
  */
 
 #pragma once
@@ -38,12 +38,17 @@ public:
     // Uninstall VB-CABLE driver
     bool uninstallVBCable();
     
-    // Install Steam Streaming Microphone driver (requires external files)
+    // Install Steam Streaming Microphone driver (extracts embedded drivers)
+    // This driver is preferred for lower latency (WDM-KS)
     bool installSteamMicrophone();
 
     // Uninstall Steam Streaming Microphone driver
     bool uninstallSteamMicrophone();
     
+    // Helper to disable the "Steam Streaming Microphone" playback endpoint (Speaker)
+    // to avoid confusion with the actual Microphone endpoint.
+    bool disableSteamStreamingSpeakers();
+
 private:
     std::string driver_path_;
     
@@ -66,9 +71,7 @@ private:
     // Helper to remove any devices matching a hardware ID (cleanup)
     void removeDevicesByHardwareId(const std::string& hardwareId);
 
-    // Helper to disable the "Steam Streaming Microphone" playback endpoint (Speaker)
-    // to avoid confusion with the actual Microphone endpoint.
-    bool disableSteamStreamingSpeakers();
+
 };
 
 } // namespace moonmic

@@ -53,8 +53,23 @@ public:
     AudioReceiver();
     ~AudioReceiver();
     
+    /**
+     * @brief Start the audio receiver
+     * Initializes network, decoder, and virtual audio device based on config
+     * @param config Application configuration
+     * @return true if started successfully
+     */
     bool start(const Config& config);
+
+    /**
+     * @brief Stop the audio receiver
+     * Cleanly shuts down network and restores original audio device
+     */
     void stop();
+
+    /**
+     * @brief Check if receiver main loop is running
+     */
     bool isRunning() const { return running_; }
     
     // Pause/Resume - maintains connection but stops/resumes audio processing

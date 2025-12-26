@@ -1,5 +1,8 @@
 # VB-CABLE Driver for MoonMic Host
 
+> **Note**: This is the **Alternative** driver option.
+> The **Steam Streaming Microphone** driver is recommended for lower latency.
+
 ## What is VB-CABLE?
 
 VB-CABLE is a virtual audio driver that creates a virtual audio cable on Windows:

@@ -10,37 +10,43 @@ Configuration is saved to:
 
 Settings automatically save when changed in the GUI. You rarely need to edit manually.
 
-## 2. Install VB-CABLE (Windows Only - First Time)
+## 2. Install Virtual Audio Driver
 
-**All driver files are embedded in `moonmic-host.exe`! No need for separate downloads.**
+**moonmic-host includes embedded drivers for instant setup.**
 
-### Option A: GUI Installation (Easiest)
+### Option A: Driver Manager (GUI)
 1. Run `moonmic-host.exe`
-2. Look for the driver status section in the GUI
-3. If VB-CABLE is not installed, click **"Install VB-CABLE Driver"** button
-4. Click OK when prompted for admin rights
-5. Wait for installation to complete
-6. **Reboot your PC** (required)
+2. Click **"Driver Manager"** button.
+3. Select **"Install Steam Streaming Microphone"** (Recommended for lower latency).
+4. Or select "Install VB-CABLE".
+5. Follow the prompts.
+6. **Restart Application** when prompted.
 
 ### Option B: Command Line
 ```cmd
-moonmic-host.exe --install-driver
+# Install Steam driver (Recommended)
+moonmic-host.exe --install-steam-driver
+
+# Or VB-CABLE
+moonmic-host.exe --install-vbcable-driver
 ```
 
-The installer will:
-- Extract embedded driver files to a temporary location
-- Run the VB-CABLE installer
-- Clean up temporary files automatically
+### 3. Verification
 
-### Verify Installation
+After installation and restart:
 
-After rebooting, check Windows Sound Settings:
-- **Output**: You should see "CABLE Input (VB-Audio Virtual Cable)"
-- **Input**: You should see "CABLE Output (VB-Audio Virtual Cable)"
+**If using Steam Driver (Default):**
+- **Recording Device**: "Microphone (Steam Streaming Microphone)" should be present.
+- **Playback Device**: "Speakers (Steam Streaming Microphone)" might exist but is usually disabled by MoonMic to specific issues.
 
-> **Note**: The moonmic-host GUI will show "[OK] VB-CABLE Installed" if successful.
+**If using VB-CABLE:**
+- **Output**: "CABLE Input (VB-Audio Virtual Cable)"
+- **Input**: "CABLE Output (VB-Audio Virtual Cable)"
 
-## 3. Run moonmic-host
+The MoonMic GUI will show "[OK] Driver Installed".
+
+## 4. Run moonmic-host
+
 
 ### Console Mode (Recommended for Testing)
 ```cmd
@@ -59,21 +65,14 @@ You should see:
 [AudioReceiver] Listening on 0.0.0.0:48100
 ```
 
-## 4. Configure Applications
+## 5. Configure Applications
 
-To use the virtual microphone in your applications:
+To use the virtual microphone:
 
-### Discord
-1. Settings → Voice & Video
-2. Input Device → **CABLE Output (VB-Audio Virtual Cable)**
+### Discord / OBS / Teams
 
-### OBS Studio
-1. Sources → Add → Audio Input Capture
-2. Device → **CABLE Output (VB-Audio Virtual Cable)**
-
-### Microsoft Teams / Zoom
-1. Audio Settings
-2. Microphone → **CABLE Output (VB-Audio Virtual Cable)**
+1. **Input Device / Microphone**: Select **"Microphone (Steam Streaming Microphone)"** (or "CABLE Output" if using VB-CABLE).
+2. **Output Device**: Leave as default (your headphones/speakers). Do NOT select "Steam Streaming Speakers".
 
 ## 5. Connect from PS Vita
 

@@ -167,10 +167,11 @@ On the host PC, run `moonmic-host` application:
 # Download from releases or build from source
 moonmic-host.exe
 
-# First-time setup: Install VB-CABLE driver
-moonmic-host.exe --install-driver
+# First-time setup: Install Steam Streaming Microphone (Recommended)
+moonmic-host.exe --install-steam-driver
 
-# Or use the GUI "Install VB-CABLE Driver" button
+# Or use the GUI "Driver Manager"
+# Drivers are embedded in the executable - no external download needed.
 ```
 
 ### Linux
@@ -297,6 +298,7 @@ typedef struct {
 
 ## Credits
 
+- **Valve Corporation** - Steam Streaming Microphone Driver
 - **VB-Audio Software** - VB-CABLE virtual audio driver (https://vb-audio.com/Cable/)
 - **Xiph.Org Foundation** - Opus audio codec  
 - **Dear ImGui** - Host application GUI
