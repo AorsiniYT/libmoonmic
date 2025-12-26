@@ -9,9 +9,48 @@
 #include <windows.h>
 #include <mmdeviceapi.h>
 #include <functiondiscoverykeys_devpkey.h>
+#include <setupapi.h>
+#include <newdev.h>
+#include <devguid.h>
 #include <iostream>
 #include <filesystem>
 #include <vector>
+#include <algorithm>
+
+#ifndef MAX_CLASS_NAME_LEN
+#define MAX_CLASS_NAME_LEN 32
+#endif
+
+#ifndef GUID_NULL
+const GUID GUID_NULL = { 0, 0, 0, { 0, 0, 0, 0, 0, 0, 0, 0 } };
+#endif
+
+// Define DeviceShareMode enum if not available
+typedef enum DeviceShareMode {
+    DeviceShareModeShared,
+    DeviceShareModeExclusive
+} DeviceShareMode;
+
+// Undocumented IPolicyConfig interface for disabling audio endpoints
+interface IPolicyConfig : public IUnknown
+{
+public:
+    virtual HRESULT STDMETHODCALLTYPE GetMixFormat(PCWSTR, WAVEFORMATEX **) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetDeviceFormat(PCWSTR, INT, WAVEFORMATEX **) = 0;
+    virtual HRESULT STDMETHODCALLTYPE ResetDeviceFormat(PCWSTR) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetDeviceFormat(PCWSTR, WAVEFORMATEX *, WAVEFORMATEX *) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetProcessingPeriod(PCWSTR, INT, PINT64, PINT64) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetProcessingPeriod(PCWSTR, PINT64) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetShareMode(PCWSTR, DeviceShareMode *) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetShareMode(PCWSTR, DeviceShareMode *) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetPropertyValue(PCWSTR, const PROPERTYKEY &, PROPVARIANT *) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetPropertyValue(PCWSTR, const PROPERTYKEY &, PROPVARIANT *) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetDefaultEndpoint(PCWSTR, ERole) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetEndpointVisibility(PCWSTR, INT) = 0; // 0 = Hidden, 1 = Visible
+};
+
+static const IID IID_IPolicyConfig = { 0xf8679f50, 0x850a, 0x41cf, { 0x9c, 0x72, 0x43, 0x0f, 0x29, 0x02, 0x90, 0xc8 } };
+static const CLSID CLSID_PolicyConfig = { 0x870af99c, 0x171d, 0x4f9e, { 0xaf, 0x0d, 0xe6, 0x3d, 0xf4, 0x0c, 0x2b, 0xc9 } };
 
 namespace moonmic {
 
@@ -240,7 +279,7 @@ bool DriverInstaller::uninstallVBCable() {
 }
 
 bool DriverInstaller::isAnyDriverInstalled() {
-    return isVBCableInstalled() || isSteamSpeakersInstalled();
+    return isVBCableInstalled() || isSteamMicrophoneInstalled();
 }
 
 bool DriverInstaller::extractResourceToFile(const char* resource_name, const std::string& output_path) {
@@ -469,11 +508,10 @@ bool DriverInstaller::runSetupExecutable(bool uninstall) {
     return success;
 }
 
-bool DriverInstaller::isSteamSpeakersInstalled() {
+bool DriverInstaller::isSteamMicrophoneInstalled() {
     // Check if Steam Microphone device exists (Output or Input)
     // We primarily need the Microphone endpoint for WDM-KS injection
-    std::string deviceName1 = "Steam Streaming Microphone"; // Priority
-    std::string deviceName2 = "Steam Streaming Speakers";   // Legacy check
+    std::wstring targetName = L"Steam Streaming Microphone"; // Priority
     
     // Scan both playback and recording to be sure
     bool found = false;
@@ -481,7 +519,9 @@ bool DriverInstaller::isSteamSpeakersInstalled() {
     HRESULT hr;
     IMMDeviceEnumerator* enumerator = NULL;
     
-    CoInitialize(NULL);
+    // Initialize COM library
+    hr = CoInitialize(NULL);
+    // S_FALSE means already initialized, which is fine.
     
     hr = CoCreateInstance(
         __uuidof(MMDeviceEnumerator),
@@ -497,7 +537,8 @@ bool DriverInstaller::isSteamSpeakersInstalled() {
         
         for (EDataFlow flow : flows) {
              IMMDeviceCollection* collection = NULL;
-             hr = enumerator->EnumAudioEndpoints(flow, DEVICE_STATE_ACTIVE, &collection);
+             // Check ALL states (Active, Disabled, Unplugged) to avoid duplicate installs
+             hr = enumerator->EnumAudioEndpoints(flow, DEVICE_STATEMASK_ALL, &collection);
              
              if (SUCCEEDED(hr)) {
                 UINT count;
@@ -513,18 +554,36 @@ bool DriverInstaller::isSteamSpeakersInstalled() {
                         
                         if (props) {
                             PROPVARIANT varName;
+                            
+                            // Check Friendly Name
                             PropVariantInit(&varName);
                             props->GetValue(PKEY_Device_FriendlyName, &varName);
-                            
                             if (varName.vt == VT_LPWSTR) {
                                 std::wstring wname(varName.pwszVal);
-                                std::string name(wname.begin(), wname.end());
-                                if (name.find(deviceName1) != std::string::npos || 
-                                    name.find(deviceName2) != std::string::npos) {
+                                // Debug: Print all devices to see what's going on
+                                // std::wcout << L"[DriverInstaller] Checking: " << wname << std::endl;
+                                
+                                if (wname.find(targetName) != std::wstring::npos) {
                                     found = true;
+                                    // std::wcout << L"[DriverInstaller] Found existing device (FriendlyName): " << wname << std::endl;
                                 }
                             }
                             PropVariantClear(&varName);
+
+                            // Check Device Description if not found yet
+                            if (!found) {
+                                PropVariantInit(&varName);
+                                props->GetValue(PKEY_Device_DeviceDesc, &varName);
+                                if (varName.vt == VT_LPWSTR) {
+                                    std::wstring wdesc(varName.pwszVal);
+                                    if (wdesc.find(targetName) != std::wstring::npos) {
+                                        found = true;
+                                        // std::wcout << L"[DriverInstaller] Found existing device (DeviceDesc): " << wdesc << std::endl;
+                                    }
+                                }
+                                PropVariantClear(&varName);
+                            }
+                            
                             props->Release();
                         }
                         device->Release();
@@ -536,7 +595,58 @@ bool DriverInstaller::isSteamSpeakersInstalled() {
             if (found) break;
         }
         enumerator->Release();
+    } else {
+        std::cerr << "[DriverInstaller] Failed to create MMDeviceEnumerator: " << std::hex << hr << std::endl;
     }
+
+    if (!found) {
+        // Also check using SetupAPI for the actual driver node, which is more reliable
+        // for detecting installed drivers even if they don't have an active audio endpoint.
+        HDEVINFO hDevInfo = SetupDiGetClassDevsA(NULL, NULL, NULL, DIGCF_PRESENT | DIGCF_ALLCLASSES);
+        if (hDevInfo != INVALID_HANDLE_VALUE) {
+            SP_DEVINFO_DATA devInfoData;
+            devInfoData.cbSize = sizeof(SP_DEVINFO_DATA);
+            
+            for (DWORD i = 0; SetupDiEnumDeviceInfo(hDevInfo, i, &devInfoData); i++) {
+                char buffer[4096]; // Large buffer for multi-sz
+                
+                // Check Hardware IDs
+                if (SetupDiGetDeviceRegistryPropertyA(hDevInfo, &devInfoData, SPDRP_HARDWAREID, NULL, (PBYTE)buffer, sizeof(buffer), NULL)) {
+                    // Hardware IDs are a REG_MULTI_SZ list
+                    char* p = buffer;
+                    while (*p && (p - buffer < sizeof(buffer))) {
+                        std::string hwId = p;
+                        // Convert to lower case for comparison
+                        std::transform(hwId.begin(), hwId.end(), hwId.begin(), 
+                            [](unsigned char c){ return std::tolower(c); });
+                        
+                        if (hwId.find("steamstreamingmicrophone") != std::string::npos) {
+                            found = true;
+                            break;
+                        }
+                        p += strlen(p) + 1;
+                    }
+                }
+                
+                if (found) break;
+                
+                // Check Friendly Name
+                if (SetupDiGetDeviceRegistryPropertyA(hDevInfo, &devInfoData, SPDRP_FRIENDLYNAME, NULL, (PBYTE)buffer, sizeof(buffer), NULL)) {
+                    std::string name = buffer;
+                    if (name.find("Steam Streaming Microphone") != std::string::npos) {
+                        found = true;
+                        break;
+                    }
+                }
+                
+                if (found) break;
+            }
+            SetupDiDestroyDeviceInfoList(hDevInfo);
+        }
+    }
+    
+    // Do not uninitialize if we didn't initialize it (S_FALSE), but CoUninitialize handles balancing usually.
+    // However, to be safe in a mixed app, we usually pair them.
     CoUninitialize();
     
     return found;
@@ -560,9 +670,6 @@ bool DriverInstaller::extractEmbeddedSteamDriver(const std::string& temp_dir, bo
             {"IDR_STEAM_MIC_X64_INF", "SteamStreamingMicrophone.inf"},
             {"IDR_STEAM_MIC_X64_SYS", "SteamStreamingMicrophone.sys"},
             {"IDR_STEAM_MIC_X64_CAT", "steamstreamingmicrophone.cat"},
-            {"IDR_STEAM_SPK_X64_INF", "SteamStreamingSpeakers.inf"},
-            {"IDR_STEAM_SPK_X64_SYS", "SteamStreamingSpeakers.sys"},
-            {"IDR_STEAM_SPK_X64_CAT", "steamstreamingspeakers.cat"},
             {"IDR_STEAM_X64_DLL", "WdfCoinstaller01009.dll"}
         };
     } else {
@@ -570,9 +677,6 @@ bool DriverInstaller::extractEmbeddedSteamDriver(const std::string& temp_dir, bo
             {"IDR_STEAM_MIC_X86_INF", "SteamStreamingMicrophone.inf"},
             {"IDR_STEAM_MIC_X86_SYS", "SteamStreamingMicrophone.sys"},
             {"IDR_STEAM_MIC_X86_CAT", "steamstreamingmicrophone.cat"},
-            {"IDR_STEAM_SPK_X86_INF", "SteamStreamingSpeakers.inf"},
-            {"IDR_STEAM_SPK_X86_SYS", "SteamStreamingSpeakers.sys"},
-            {"IDR_STEAM_SPK_X86_CAT", "steamstreamingspeakers.cat"},
             {"IDR_STEAM_X86_DLL", "WdfCoinstaller01009.dll"}
         };
     }
@@ -588,7 +692,13 @@ bool DriverInstaller::extractEmbeddedSteamDriver(const std::string& temp_dir, bo
     return extracted > 0;
 }
 
-bool DriverInstaller::installSteamSpeakers() {
+bool DriverInstaller::installSteamMicrophone() {
+    // Check if already installed to prevent duplicates
+    if (isSteamMicrophoneInstalled()) {
+        std::cout << "[DriverInstaller] Steam Streaming Microphone is already installed. Skipping installation." << std::endl;
+        return true;
+    }
+
     if (!isRunningAsAdmin()) {
         std::cerr << "[DriverInstaller] Administrator privileges required for Steam Driver" << std::endl;
         return false;
@@ -623,7 +733,6 @@ bool DriverInstaller::installSteamSpeakers() {
     
     // We only need the Microphone driver for injection
     std::filesystem::path mic_inf_path = driver_dir / "SteamStreamingMicrophone.inf";
-    std::filesystem::path spk_inf_path = driver_dir / "SteamStreamingSpeakers.inf"; 
     
     if (!std::filesystem::exists(mic_inf_path)) {
         std::cerr << "[DriverInstaller] Steam Microphone INF not found at: " << mic_inf_path << std::endl;
@@ -631,34 +740,55 @@ bool DriverInstaller::installSteamSpeakers() {
     }
     
     std::cout << "[DriverInstaller] Installing Steam Microphone from: " << mic_inf_path << std::endl;
-    std::string cmd = "pnputil /add-driver \"" + mic_inf_path.string() + "\" /install";
-    std::cout << "[DriverInstaller] Executing: " << cmd << std::endl;
-    int ret = system(cmd.c_str());
     
-    // Install Speakers skipped as per user request (Microphone only)
-    /*
-    if (std::filesystem::exists(spk_inf_path)) {
-         std::string cmd2 = "pnputil /add-driver \"" + spk_inf_path.string() + "\" /install";
-         system(cmd2.c_str());
+    // 1. Add driver to store using pnputil (standard way)
+    // This ensures the driver package is trusted and available
+    std::string cmd = "pnputil /add-driver \"" + mic_inf_path.string() + "\"";
+    std::cout << "[DriverInstaller] Adding driver to store: " << cmd << std::endl;
+    system(cmd.c_str());
+    
+    // 2. Check if device appeared (maybe it was just missing the driver)
+    if (isSteamMicrophoneInstalled()) {
+        std::cout << "[DriverInstaller] Device detected after adding driver." << std::endl;
+        if (temp_dir_path.find("moonmic_steam") != std::string::npos) {
+            cleanupTempDir(temp_dir_path);
+        }
+        
+        // Ensure we disable the speaker endpoint even if we took this shortcut
+        disableSteamStreamingSpeakers();
+        
+        return true;
     }
-    */
+    
+    // Cleanup any "Unknown" or broken devices with this ID before creating a new one
+    removeDevicesByHardwareId("STEAMSTREAMINGMICROPHONE");
+    
+    // 3. Create the root enumerated device node
+    std::cout << "[DriverInstaller] Creating root device node..." << std::endl;
+    // Hardware ID from INF: STEAMSTREAMINGMICROPHONE
+    bool success = createRootDevice("STEAMSTREAMINGMICROPHONE", mic_inf_path.string());
     
     // Cleanup temp dir if we created it
     if (temp_dir_path.find("moonmic_steam") != std::string::npos) {
         cleanupTempDir(temp_dir_path);
     }
 
-    // Check pnputil return code (0 = success, 3010 = reboot required, 259 = no more items)
-    if (ret == 0 || ret == 3010 || ret == 259) {
+    if (success) {
         std::cout << "[DriverInstaller] Steam Driver installed successfully." << std::endl;
+        
+        // Disable the confusing "Steam Streaming Microphone" playback endpoint if it exists
+        // This prevents users from selecting it as a speaker, which causes loops or silence.
+        // We only want the Recording endpoint active.
+        disableSteamStreamingSpeakers();
+        
         return true;
     } else {
-        std::cerr << "[DriverInstaller] Installation failed with code: " << ret << std::endl;
+        std::cerr << "[DriverInstaller] Installation failed." << std::endl;
         return false;
     }
 }
 
-bool DriverInstaller::uninstallSteamSpeakers() {
+bool DriverInstaller::uninstallSteamMicrophone() {
     if (!isRunningAsAdmin()) {
         std::cerr << "[DriverInstaller] Administrator privileges required" << std::endl;
         return false;
@@ -666,41 +796,49 @@ bool DriverInstaller::uninstallSteamSpeakers() {
 
     std::cout << "[DriverInstaller] Uninstalling Steam Streaming Drivers..." << std::endl;
     
-    // Force delete driver using pnputil
-    // Using /delete-driver <oem#.inf> /uninstall /force
-    // But we don't know the oem#.inf.
-    // However, pnputil /delete-driver /force can work if we knew the published name.
-    // Easier approach: Use `devcon` if available, but we don't have it.
-    // `pnputil /enum-drivers` can list it.
-    
-    // Better strategy for uninstall without knowing OEM name:
-    // Just try to remove the device instance? No, that doesn't delete driver.
-    // Since we provided the INF we can try to install with /delete-driver? No.
-    
-    // Wait, the user asked to "uninstall".
-    // Let's use a PowerShell one-liner to find and remove it, it's safer.
-    // "Get-WindowsDriver -Online | Where-Object { $_.OriginalFileName -like '*SteamStreamingMicrophone.inf*' } | ForEach-Object { pnputil /delete-driver $_.Driver /uninstall /force }"
-    
-    std::string powershell_cmd = "powershell -Command \"Get-WindowsDriver -Online -All | Where-Object { $_.OriginalFileName -like '*SteamStreamingMicrophone.inf*' -or $_.OriginalFileName -like '*SteamStreamingSpeakers.inf*' } | ForEach-Object { pnputil /delete-driver $_.Driver /uninstall /force }\"";
-    
+    // 1. Explicitly remove the Device Node first (Important for immediate effect without reboot)
+    std::cout << "[DriverInstaller] Removing PnP Device Nodes..." << std::endl;
+    removeDevicesByHardwareId("STEAMSTREAMINGMICROPHONE");
+
+    // 2. Remove the driver package from the store
+    // We only install the Steam Streaming Microphone driver package.
+    // For uninstall, we must delete the published OEM INF (oemXX.inf).
+    // We can resolve it via Get-WindowsDriver and then call pnputil on the resolved names.
+    // Also, drivers may appear multiple times; dedupe before deleting.
+    const char* ps_script =
+        "$drivers = Get-WindowsDriver -Online -All | Where-Object { $_.OriginalFileName -like '*SteamStreamingMicrophone.inf*' }; "
+        "if ($drivers) { "
+        "  foreach ($d in $drivers) { "
+        "    Write-Host 'Removing driver: ' $d.Driver; "
+        "    pnputil /delete-driver $d.Driver /uninstall /force | Out-Host "
+        "  } "
+        "} else { Write-Host 'No Steam Microphone drivers found.' }";
+
+    std::string ps_args;
+    ps_args.reserve(1024);
+    ps_args = "-NoProfile -ExecutionPolicy Bypass -Command \"";
+    ps_args += ps_script;
+    ps_args += "\"";
+
     std::cout << "[DriverInstaller] Executing uninstall script..." << std::endl;
-    
-    // Use ShellExecuteEx to run PowerShell without blocking the GUI
+
+    // Use ShellExecuteEx to run PowerShell elevated.
+    // Run hidden (SW_HIDE) for a cleaner UX.
     SHELLEXECUTEINFOA sei = { sizeof(sei) };
-    sei.fMask = SEE_MASK_NOCLOSEPROCESS; // Show console window for user visibility
-    sei.lpVerb = "runas"; // Run as admin
+    sei.fMask = SEE_MASK_NOCLOSEPROCESS;
+    sei.lpVerb = "runas";
     sei.lpFile = "powershell.exe";
-    sei.lpParameters = ("-Command \"Get-WindowsDriver -Online -All | Where-Object { $_.OriginalFileName -like '*SteamStreamingMicrophone.inf*' -or $_.OriginalFileName -like '*SteamStreamingSpeakers.inf*' } | ForEach-Object { pnputil /delete-driver $_.Driver /uninstall /force }\"");
-    sei.nShow = SW_SHOW; // Show console window to display uninstall progress
+    sei.lpParameters = ps_args.c_str();
+    sei.nShow = SW_HIDE;
     
     if (!ShellExecuteExA(&sei)) {
         std::cerr << "[DriverInstaller] Failed to execute uninstall command" << std::endl;
         return false;
     }
     
-    // Wait with timeout (10 seconds max) to avoid infinite hang
+    // Wait with timeout to avoid infinite hang (pnputil can take a while)
     if (sei.hProcess) {
-        DWORD waitResult = WaitForSingleObject(sei.hProcess, 10000); // 10 second timeout
+        DWORD waitResult = WaitForSingleObject(sei.hProcess, 60000); // 60 second timeout
         
         if (waitResult == WAIT_TIMEOUT) {
             std::cout << "[DriverInstaller] Uninstall command timed out (still running in background)" << std::endl;
@@ -719,6 +857,192 @@ bool DriverInstaller::uninstallSteamSpeakers() {
     }
     
     return true; // Consider it successful even if we couldn't verify
+}
+
+bool DriverInstaller::createRootDevice(const std::string& hardwareId, const std::string& infPath) {
+    GUID classGuid = GUID_NULL;
+    char className[MAX_CLASS_NAME_LEN];
+    
+    // 1. Get Class GUID from INF
+    if (!SetupDiGetINFClassA(infPath.c_str(), &classGuid, className, MAX_CLASS_NAME_LEN, NULL)) {
+        std::cerr << "[DriverInstaller] Failed to get class GUID from INF. Error: " << GetLastError() << std::endl;
+        return false;
+    }
+    
+    // 2. Create Device Info List
+    HDEVINFO hDevInfo = SetupDiCreateDeviceInfoList(&classGuid, NULL);
+    if (hDevInfo == INVALID_HANDLE_VALUE) {
+        std::cerr << "[DriverInstaller] Failed to create device info list. Error: " << GetLastError() << std::endl;
+        return false;
+    }
+    
+    // 3. Create Device Info Element
+    SP_DEVINFO_DATA devInfoData;
+    devInfoData.cbSize = sizeof(SP_DEVINFO_DATA);
+    if (!SetupDiCreateDeviceInfoA(hDevInfo, className, &classGuid, NULL, NULL, DICD_GENERATE_ID, &devInfoData)) {
+        std::cerr << "[DriverInstaller] Failed to create device info. Error: " << GetLastError() << std::endl;
+        SetupDiDestroyDeviceInfoList(hDevInfo);
+        return false;
+    }
+    
+    // 4. Set Hardware ID
+    // Hardware ID must be a REG_MULTI_SZ (double null terminated)
+    std::vector<char> hwIdBuffer(hardwareId.length() + 2, 0);
+    memcpy(hwIdBuffer.data(), hardwareId.c_str(), hardwareId.length());
+    
+    if (!SetupDiSetDeviceRegistryPropertyA(hDevInfo, &devInfoData, SPDRP_HARDWAREID, (const BYTE*)hwIdBuffer.data(), (DWORD)hwIdBuffer.size())) {
+        std::cerr << "[DriverInstaller] Failed to set Hardware ID. Error: " << GetLastError() << std::endl;
+        SetupDiDestroyDeviceInfoList(hDevInfo);
+        return false;
+    }
+    
+    // 5. Register Device
+    if (!SetupDiCallClassInstaller(DIF_REGISTERDEVICE, hDevInfo, &devInfoData)) {
+        std::cerr << "[DriverInstaller] Failed to register device. Error: " << GetLastError() << std::endl;
+        SetupDiDestroyDeviceInfoList(hDevInfo);
+        return false;
+    }
+    
+    // Give PnP a moment to register the device node
+    Sleep(1000);
+    
+    // 6. Install Driver
+    BOOL rebootRequired = FALSE;
+    // UpdateDriverForPlugAndPlayDevices installs the driver for the device we just created
+    BOOL result = UpdateDriverForPlugAndPlayDevicesA(NULL, hardwareId.c_str(), infPath.c_str(), INSTALLFLAG_FORCE, &rebootRequired);
+    
+    if (!result) {
+        DWORD err = GetLastError();
+        std::cerr << "[DriverInstaller] UpdateDriverForPlugAndPlayDevices failed: " << err << std::endl;
+        
+        // Fallback: Try DiInstallDriver (from newdev.dll)
+        // This is another way to install drivers on matching devices
+        // Note: DiInstallDriverA might not be available in all contexts, but we linked newdev
+        // It returns TRUE on success
+        /* 
+           DiInstallDriverA is not always reliable for root enumerated devices if they are not yet "present".
+           But since we registered it, it should be present.
+        */
+        
+        // If failed, remove the device to avoid "Unknown Device"
+        std::cerr << "[DriverInstaller] Cleaning up failed device creation..." << std::endl;
+        SetupDiCallClassInstaller(DIF_REMOVE, hDevInfo, &devInfoData);
+    } else {
+        std::cout << "[DriverInstaller] Root device created and driver installed." << std::endl;
+    }
+    
+    SetupDiDestroyDeviceInfoList(hDevInfo);
+    return result == TRUE;
+}
+
+void DriverInstaller::removeDevicesByHardwareId(const std::string& hardwareId) {
+    HDEVINFO hDevInfo = SetupDiGetClassDevsA(NULL, NULL, NULL, DIGCF_ALLCLASSES);
+    if (hDevInfo == INVALID_HANDLE_VALUE) return;
+    
+    SP_DEVINFO_DATA devInfoData;
+    devInfoData.cbSize = sizeof(SP_DEVINFO_DATA);
+    
+    for (DWORD i = 0; SetupDiEnumDeviceInfo(hDevInfo, i, &devInfoData); i++) {
+        char buffer[4096];
+        if (SetupDiGetDeviceRegistryPropertyA(hDevInfo, &devInfoData, SPDRP_HARDWAREID, NULL, (PBYTE)buffer, sizeof(buffer), NULL)) {
+            char* p = buffer;
+            bool match = false;
+            while (*p && (p - buffer < sizeof(buffer))) {
+                std::string id = p;
+                // Case insensitive comparison
+                std::transform(id.begin(), id.end(), id.begin(), ::tolower);
+                std::string target = hardwareId;
+                std::transform(target.begin(), target.end(), target.begin(), ::tolower);
+                
+                if (id == target) {
+                    match = true;
+                    break;
+                }
+                p += strlen(p) + 1;
+            }
+            
+            if (match) {
+                std::cout << "[DriverInstaller] Removing existing device with ID: " << hardwareId << std::endl;
+                SetupDiCallClassInstaller(DIF_REMOVE, hDevInfo, &devInfoData);
+                // Reset index since we removed an item
+                i = -1; 
+            }
+        }
+    }
+    SetupDiDestroyDeviceInfoList(hDevInfo);
+}
+
+bool DriverInstaller::disableSteamStreamingSpeakers() {
+    HRESULT hr;
+    IMMDeviceEnumerator* enumerator = NULL;
+    IPolicyConfig* policyConfig = NULL;
+    bool found = false;
+
+    hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), NULL, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator), (void**)&enumerator);
+    if (FAILED(hr)) return false;
+
+    hr = CoCreateInstance(CLSID_PolicyConfig, NULL, CLSCTX_ALL, IID_IPolicyConfig, (void**)&policyConfig);
+    if (FAILED(hr)) {
+        enumerator->Release();
+        std::cerr << "[DriverInstaller] Failed to create IPolicyConfig" << std::endl;
+        return false;
+    }
+
+    // Enumerate RENDER devices (Speakers)
+    IMMDeviceCollection* collection = NULL;
+    hr = enumerator->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &collection);
+    
+    if (SUCCEEDED(hr)) {
+        UINT count;
+        collection->GetCount(&count);
+        
+        for (UINT i = 0; i < count; i++) {
+            IMMDevice* device = NULL;
+            collection->Item(i, &device);
+            
+            if (device) {
+                IPropertyStore* props = NULL;
+                device->OpenPropertyStore(STGM_READ, &props);
+                
+                if (props) {
+                    PROPVARIANT varName;
+                    PropVariantInit(&varName);
+                    props->GetValue(PKEY_Device_FriendlyName, &varName);
+                    
+                    if (varName.vt == VT_LPWSTR) {
+                        std::wstring wname(varName.pwszVal);
+                        // Check if it matches "Steam Streaming Microphone" (but is a Speaker/Render device)
+                        if (wname.find(L"Steam Streaming Microphone") != std::wstring::npos) {
+                            LPWSTR id = NULL;
+                            device->GetId(&id);
+                            if (id) {
+                                std::wcout << L"[DriverInstaller] Disabling Playback endpoint: " << wname << std::endl;
+                                // Disable (Hide) the endpoint
+                                // 0 = Hidden (Disabled in Sound Panel)
+                                hr = policyConfig->SetEndpointVisibility(id, 0);
+                                if (SUCCEEDED(hr)) {
+                                    std::cout << "[DriverInstaller] Successfully disabled playback endpoint." << std::endl;
+                                    found = true;
+                                } else {
+                                    std::cerr << "[DriverInstaller] Failed to disable endpoint. HR=" << std::hex << hr << std::endl;
+                                }
+                                CoTaskMemFree(id);
+                            }
+                        }
+                    }
+                    PropVariantClear(&varName);
+                    props->Release();
+                }
+                device->Release();
+            }
+            if (found) break;
+        }
+        collection->Release();
+    }
+    
+    policyConfig->Release();
+    enumerator->Release();
+    return found;
 }
 
 } // namespace moonmic

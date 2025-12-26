@@ -44,6 +44,9 @@ set(SOURCES
     src/gui_helper.cpp
 )
 
+# Add logger header to sources (for IDEs)
+list(APPEND SOURCES src/logger.h)
+
 
 # Platform-specific sources
 if(HOST_TARGET_WINDOWS OR (WIN32 AND NOT HOST_TARGET_LINUX))
@@ -154,6 +157,7 @@ if(HOST_TARGET_WINDOWS OR (WIN32 AND NOT HOST_TARGET_LINUX))
     add_executable(moonmic-guardian
         guardian/main.cpp
         src/guardian_state.cpp
+        src/config.cpp
         src/platform/windows/audio_device_manager.cpp
     )
     
@@ -349,6 +353,7 @@ if(HOST_TARGET_WINDOWS OR (WIN32 AND NOT HOST_TARGET_LINUX))
         ole32
         propsys
         setupapi
+        newdev      # For UpdateDriverForPlugAndPlayDevices
         uuid        # For GUID/UUID references (IPolicyConfig)
         oleaut32    # For SysAllocString/SysFreeString (BSTR operations)
     )

@@ -56,8 +56,8 @@ void AudioReceiver::resetConnectionState() {
         
         std::string output_device = config_.audio.use_speaker_mode ? "" : config_.audio.recording_endpoint_name;
         
-        // Re-init with same params
-        if (!virtual_device_->init(output_device, 48000, config_.audio.channels)) {
+        // Re-init with 0 (Auto)
+        if (!virtual_device_->init(output_device, 0, config_.audio.channels)) {
             std::cerr << "[AudioReceiver] Failed to recreate virtual device on reset" << std::endl;
         } else {
              system_sample_rate_ = virtual_device_->getSampleRate();
@@ -75,6 +75,7 @@ void AudioReceiver::resetConnectionState() {
 }
 
 bool AudioReceiver::start(const Config& config) {
+    std::lock_guard<std::mutex> lock(audio_mutex_);
     if (running_) {
         return false;
     }
@@ -96,10 +97,11 @@ bool AudioReceiver::start(const Config& config) {
     std::string output_device = config_.audio.use_speaker_mode ? "" : config_.audio.recording_endpoint_name;
     std::string output_mode = config_.audio.use_speaker_mode ? "speakers (debug)" : config_.audio.recording_endpoint_name;
     
-    // Initialize with a dummy rate - VirtualDevice will use system's native format
+    // Initialize with 0 (Auto) - VirtualDevice will use system's native format directly
+    // This avoids creating an internal resampler inside VirtualDevice
     if (!virtual_device_->init(
         output_device,
-        48000,  // Dummy value - actual rate will be detected from system
+        0,  // 0 = Auto-detect from device
         config_.audio.channels
     )) {
         std::cerr << "[AudioReceiver] Failed to initialize audio device" << std::endl;
@@ -150,18 +152,23 @@ bool AudioReceiver::start(const Config& config) {
 }
 
 void AudioReceiver::stop() {
+    std::cout << "[AudioReceiver] stop() called" << std::endl;
+    std::lock_guard<std::mutex> lock(audio_mutex_);
     if (!running_) {
+        std::cout << "[AudioReceiver] Already stopped" << std::endl;
         return;
     }
     
     running_ = false;
     
     if (receiver_) {
+        std::cout << "[AudioReceiver] Stopping UDP receiver..." << std::endl;
         receiver_->stop();
         receiver_.reset();
     }
     
     if (virtual_device_) {
+        std::cout << "[AudioReceiver] Closing virtual device..." << std::endl;
         virtual_device_->close();
         virtual_device_.reset();
     }
@@ -181,6 +188,7 @@ void AudioReceiver::stop() {
     }
     
     if (connection_monitor_) {
+        std::cout << "[AudioReceiver] Stopping connection monitor..." << std::endl;
         connection_monitor_->stop();
         connection_monitor_.reset();
     }
@@ -201,18 +209,28 @@ void AudioReceiver::stop() {
 }
 
 void AudioReceiver::pause() {
+    std::lock_guard<std::mutex> lock(audio_mutex_);
+    pauseInternal();
+}
+
+void AudioReceiver::pauseInternal() {
     if (!running_ || paused_) return;
     
     paused_ = true;
     stats_.is_paused = true;
     
     // Send STOP signal to client
-    sendControlSignal(MOONMIC_CTRL_STOP);
+    sendControlSignalInternal(MOONMIC_CTRL_STOP);
     
     std::cout << "[AudioReceiver] Paused - sent STOP to client" << std::endl;
 }
 
 void AudioReceiver::resume() {
+    std::lock_guard<std::mutex> lock(audio_mutex_);
+    resumeInternal();
+}
+
+void AudioReceiver::resumeInternal() {
     if (!running_ || !paused_) return;
     
     paused_ = false;
@@ -223,12 +241,17 @@ void AudioReceiver::resume() {
     last_packet_time_ = std::chrono::steady_clock::now();
     
     // Send START signal to client
-    sendControlSignal(MOONMIC_CTRL_START);
+    sendControlSignalInternal(MOONMIC_CTRL_START);
     
     std::cout << "[AudioReceiver] Resumed - sent START to client" << std::endl;
 }
 
 void AudioReceiver::sendControlSignal(uint32_t signal_magic) {
+    std::lock_guard<std::mutex> lock(audio_mutex_);
+    sendControlSignalInternal(signal_magic);
+}
+
+void AudioReceiver::sendControlSignalInternal(uint32_t signal_magic) {
     if (!connection_monitor_ || last_validated_ip_.empty()) {
         std::cerr << "[AudioReceiver] Cannot send control signal: no validated client" << std::endl;
         return;
@@ -255,6 +278,7 @@ void AudioReceiver::sendControlSignal(uint32_t signal_magic) {
 }
 
 bool AudioReceiver::switchAudioOutput(bool use_speakers) {
+    std::lock_guard<std::mutex> lock(audio_mutex_);
     if (!running_) return false;
     
     std::cout << "[AudioReceiver] Hot-swapping audio to " 
@@ -262,7 +286,7 @@ bool AudioReceiver::switchAudioOutput(bool use_speakers) {
     
     // Pause briefly during switch
     bool was_paused = paused_;
-    if (!was_paused) pause();
+    if (!was_paused) pauseInternal();
     
     // Close current virtual device
     if (virtual_device_) {
@@ -281,23 +305,57 @@ bool AudioReceiver::switchAudioOutput(bool use_speakers) {
     // Update config
     config_.audio.use_speaker_mode = use_speakers;
     
+#ifdef _WIN32
+    // Handle Default Mic Switching
+    if (use_speakers) {
+        // Enabling Speaker Mode: Restore original mic if we changed it
+        if (!config_.audio.original_mic_id.empty()) {
+            std::cout << "[AudioReceiver] Speaker Mode: Restoring original default microphone..." << std::endl;
+            if (moonmic::platform::windows::SetDefaultRecordingDevice(config_.audio.original_mic_id)) {
+                std::cout << "[AudioReceiver] Original microphone restored." << std::endl;
+            }
+            config_.audio.original_mic_id = ""; 
+            config_.save(Config::getDefaultConfigPath());
+        }
+    } else {
+        // Disabling Speaker Mode (Enabling Virtual Mic): Set Virtual Mic as default
+        std::string currentId, currentName;
+        if (moonmic::platform::windows::GetDefaultRecordingDevice(currentId, currentName)) {
+             std::string virtualId = moonmic::platform::windows::FindRecordingDeviceID(config_.audio.recording_endpoint_name);
+             
+             // Only save/switch if we are not already on the virtual device
+             if (currentId != virtualId) {
+                 std::cout << "[AudioReceiver] Virtual Mic Mode: Saving original default mic: " << currentName << std::endl;
+                 config_.audio.original_mic_id = currentId;
+                 config_.save(Config::getDefaultConfigPath());
+                 
+                 if (moonmic::platform::windows::SetDefaultRecordingDevice(config_.audio.recording_endpoint_name)) {
+                     std::cout << "[AudioReceiver] Set default mic to: " << config_.audio.recording_endpoint_name << std::endl;
+                 }
+             }
+        }
+    }
+#endif
+
     // Create new virtual device using factory
-    std::string output_device = use_speakers ? "" : config_.audio.driver_device_name;
-    std::string output_mode = use_speakers ? "speakers (debug)" : "VB-Cable (microphone)";
+    std::string output_device = use_speakers ? "" : config_.audio.recording_endpoint_name;
+    std::string output_mode = use_speakers ? "speakers (debug)" : config_.audio.recording_endpoint_name;
     
     virtual_device_ = VirtualDevice::create();
-    if (!virtual_device_->init(output_device, 48000, config_.audio.channels)) {
+    
+    // Initialize with 0 (Auto) to detect system rate and avoid internal resampling
+    if (!virtual_device_->init(output_device, 0, config_.audio.channels)) {
         std::cerr << "[AudioReceiver] Failed to initialize new audio device" << std::endl;
-        if (!was_paused) resume();
+        if (!was_paused) resumeInternal();
         return false;
     }
     
     system_sample_rate_ = virtual_device_->getSampleRate();
     std::cout << "[AudioReceiver] Audio output: " << output_mode 
               << " @ " << system_sample_rate_ << "Hz" << std::endl;
-    
+
     // Resume if we weren't paused before
-    if (!was_paused) resume();
+    if (!was_paused) resumeInternal();
     
     return true;
 }
@@ -319,6 +377,7 @@ bool AudioReceiver::isClientAllowed(const std::string& ip) {
 }
 
 void AudioReceiver::onPacketReceived(const uint8_t* data, size_t size, const std::string& sender_ip, uint16_t sender_port, bool is_lagging) {
+    std::lock_guard<std::mutex> lock(audio_mutex_);
     stats_.packets_received++;
     stats_.bytes_received += size;
     stats_.last_sender_ip = sender_ip;
@@ -604,21 +663,26 @@ void AudioReceiver::onPacketReceived(const uint8_t* data, size_t size, const std
 #ifdef _WIN32
             // Auto-set Default Mic Logic - triggered when stream starts (first packet)
             // We check this here because this is where we know audio is flowing
-            std::string currentId, currentName;
-            if (moonmic::platform::windows::GetDefaultRecordingDevice(currentId, currentName)) {
-                // Check if current device is NOT our virtual device to avoid overwriting original with self
-                std::string virtualId = moonmic::platform::windows::FindRecordingDeviceID(config_.audio.recording_endpoint_name);
-                
-                if (currentId != virtualId) {
-                    std::cout << "[AudioReceiver] Saving original default mic: " << currentName << " (" << currentId << ")" << std::endl;
-                    config_.audio.original_mic_id = currentId;
+            // Only if NOT in speaker mode
+            if (!config_.audio.use_speaker_mode) {
+                std::string currentId, currentName;
+                if (moonmic::platform::windows::GetDefaultRecordingDevice(currentId, currentName)) {
+                    // Check if current device is NOT our virtual device to avoid overwriting original with self
+                    std::string virtualId = moonmic::platform::windows::FindRecordingDeviceID(config_.audio.recording_endpoint_name);
                     
-                    // Save config immediately to persist backup ID in case of crash
-                    config_.save(Config::getDefaultConfigPath());
-                    
-                    // Set new default
-                    if (moonmic::platform::windows::SetDefaultRecordingDevice(config_.audio.recording_endpoint_name)) {
-                        std::cout << "[AudioReceiver] Auto-set default mic to: " << config_.audio.recording_endpoint_name << std::endl;
+                    // Only proceed if we actually FOUND the virtual device ID
+                    // If virtualId is empty, the driver is missing, so we can't switch to it anyway.
+                    if (!virtualId.empty() && currentId != virtualId) {
+                        std::cout << "[AudioReceiver] Saving original default mic: " << currentName << " (" << currentId << ")" << std::endl;
+                        config_.audio.original_mic_id = currentId;
+                        
+                        // Save config immediately to persist backup ID in case of crash
+                        config_.save(Config::getDefaultConfigPath());
+                        
+                        // Set new default
+                        if (moonmic::platform::windows::SetDefaultRecordingDevice(config_.audio.recording_endpoint_name)) {
+                            std::cout << "[AudioReceiver] Auto-set default mic to: " << config_.audio.recording_endpoint_name << std::endl;
+                        }
                     }
                 }
             }
@@ -720,7 +784,8 @@ void AudioReceiver::onPacketReceived(const uint8_t* data, size_t size, const std
     // The Steam driver with WDM-KS has automatic gain that amplifies everything to maximum.
     // VB-Cable (WASAPI) doesn't have this issue, so it's driver-specific.
     // Apply 15% attenuation (0.15x) so that after the driver's AGC, audio is at normal levels.
-    if (config_.audio.recording_endpoint_name.find("Steam") != std::string::npos) {
+    // Only apply if we are NOT in speaker mode (actually feeding the driver)
+    if (!config_.audio.use_speaker_mode && config_.audio.recording_endpoint_name.find("Steam") != std::string::npos) {
         static bool attenuation_logged = false;
         if (!attenuation_logged) {
             std::cout << "[AudioReceiver] Steam WDM-KS detected: applying 15% pre-attenuation to compensate for driver AGC" << std::endl;

@@ -142,7 +142,8 @@ int FFmpegDecoder::decode(const uint8_t* input, int input_size, float* output, i
     }
     
     // DEBUG: Log first few decode calls
-    static int decode_count = 0;
+    // Set to 100 to disable logging (was 0)
+    static int decode_count = 100;
     if (decode_count < 10) {
         std::cout << "[FFmpegDecoder] Decode #" << decode_count 
                   << ": input_size=" << input_size 

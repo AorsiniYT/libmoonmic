@@ -26,8 +26,8 @@ public:
     // Check if VB-CABLE driver is installed
     bool isVBCableInstalled();
     
-    // Check if Steam Streaming Speakers/Microphone driver is installed
-    bool isSteamSpeakersInstalled();
+    // Check if Steam Streaming Microphone driver is installed
+    bool isSteamMicrophoneInstalled();
     
     // Check if ANY compatible driver is installed
     bool isAnyDriverInstalled();
@@ -38,11 +38,11 @@ public:
     // Uninstall VB-CABLE driver
     bool uninstallVBCable();
     
-    // Install Steam Streaming Speakers/Microphone driver (requires external files)
-    bool installSteamSpeakers();
+    // Install Steam Streaming Microphone driver (requires external files)
+    bool installSteamMicrophone();
 
-    // Uninstall Steam Streaming Speakers/Microphone driver
-    bool uninstallSteamSpeakers();
+    // Uninstall Steam Streaming Microphone driver
+    bool uninstallSteamMicrophone();
     
 private:
     std::string driver_path_;
@@ -59,6 +59,16 @@ private:
     // Helper to extract embedded installer files
     bool extractEmbeddedInstaller(const std::string& temp_dir);
     void cleanupTempDir(const std::string& temp_dir);
+
+    // Helper to create a root enumerated device node (like devcon install)
+    bool createRootDevice(const std::string& hardwareId, const std::string& infPath);
+    
+    // Helper to remove any devices matching a hardware ID (cleanup)
+    void removeDevicesByHardwareId(const std::string& hardwareId);
+
+    // Helper to disable the "Steam Streaming Microphone" playback endpoint (Speaker)
+    // to avoid confusion with the actual Microphone endpoint.
+    bool disableSteamStreamingSpeakers();
 };
 
 } // namespace moonmic

@@ -80,7 +80,8 @@ bool SetDefaultRecordingDevice(const std::string& nameOrId) {
 bool IsRunningAsAdmin() {
     BOOL fIsRunAsAdmin = FALSE;
     PSID pAdminSID = NULL;
-    if (AllocateAndInitializeSid(NULL, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &pAdminSID)) {
+    SID_IDENTIFIER_AUTHORITY NtAuthority = SECURITY_NT_AUTHORITY;
+    if (AllocateAndInitializeSid(&NtAuthority, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &pAdminSID)) {
         if (!CheckTokenMembership(NULL, pAdminSID, &fIsRunAsAdmin)) {
             fIsRunAsAdmin = FALSE;
         }
@@ -98,7 +99,9 @@ bool ChangeDeviceState(const std::string& name, bool enable) {
     DWORD i;
 
     // Create a HDEVINFO with all present devices
-    hDevInfo = SetupDiGetClassDevs(NULL, "MEDIA", 0, DIGCF_PRESENT | DIGCF_ALLCLASSES);
+    // Note: Passing "MEDIA" as Enumerator was incorrect (it's a class name). 
+    // We pass NULL for Enumerator to search all PnP enumerators.
+    hDevInfo = SetupDiGetClassDevs(NULL, NULL, 0, DIGCF_PRESENT | DIGCF_ALLCLASSES);
     
     if (hDevInfo == INVALID_HANDLE_VALUE) return false;
 
@@ -114,6 +117,9 @@ bool ChangeDeviceState(const std::string& name, bool enable) {
         if (SetupDiGetDeviceRegistryPropertyA(hDevInfo, &DeviceInfoData, SPDRP_FRIENDLYNAME,
                                             &DataT, (PBYTE)friendlyName, sizeof(friendlyName), NULL)) {
             
+            // Log every device we check to debug why Steam isn't found
+            std::cout << "[AudioUtils] Checking device: " << friendlyName << std::endl;
+             
             if (std::string(friendlyName).find(name) != std::string::npos) {
                 // Found match
                 found = true;

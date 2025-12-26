@@ -8,6 +8,10 @@
 #include <string>
 #include <chrono>
 #include <thread>
+#include <filesystem>
+#include <fstream>
+#include <ctime>
+#include <iomanip>
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -15,6 +19,9 @@
 #include <GLFW/glfw3.h>
 
 #include "../src/guardian_state.h"
+#include "../src/config.h"
+#include "../src/logger.h"
+#include "../src/guardian_launcher.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -87,6 +94,49 @@ struct UIState {
     bool windowVisible = false;
 };
 
+std::string getLogPath() {
+    return Logger::getLogPath();
+}
+
+void dumpLog(UIState& ui) {
+    std::string logPath = getLogPath();
+    if (!std::filesystem::exists(logPath)) {
+        ui.message = "Log file not found: " + logPath;
+        ui.mode = GuardianMode::RESULT_FAILED;
+        return;
+    }
+    
+    auto now = std::time(nullptr);
+    char buf[64];
+    std::strftime(buf, sizeof(buf), "moonmic_crash_%Y%m%d_%H%M%S.log", std::localtime(&now));
+    std::string dumpName = buf;
+    
+    std::filesystem::path p(logPath);
+    std::string dumpPath = (p.parent_path() / dumpName).string();
+    
+    try {
+        std::filesystem::copy_file(logPath, dumpPath, std::filesystem::copy_options::overwrite_existing);
+        ui.message = "Log dumped to:\n" + dumpPath;
+        ui.mode = GuardianMode::RESULT_SUCCESS;
+    } catch (const std::exception& e) {
+        ui.message = "Failed to dump log: " + std::string(e.what());
+        ui.mode = GuardianMode::RESULT_FAILED;
+    }
+}
+
+void viewLog() {
+    std::string logPath = getLogPath();
+#ifdef _WIN32
+    // Open a CMD window to display the log content
+    // /K keeps the window open so the user can read the output
+    std::string params = "/K echo [MoonMic Log Viewer] && echo File: " + logPath + " && echo ---------------------------------------- && type \"" + logPath + "\"";
+    ShellExecuteA(NULL, "open", "cmd.exe", params.c_str(), NULL, SW_SHOW);
+#else
+    std::string cmd = "xdg-open \"" + logPath + "\"";
+    system(cmd.c_str());
+#endif
+}
+
 void renderUI(UIState& ui) {
     if (!ui.windowVisible) return;
 
@@ -133,17 +183,24 @@ void renderUI(UIState& ui) {
             ImGui::Separator();
             ImGui::Spacing();
             ImGui::TextWrapped("The main application closed unexpectedly.");
-            ImGui::TextWrapped("Guardian is attempting to restore your original microphone settings.");
             ImGui::Spacing();
-            if (ImGui::Button("Restore Now", ImVec2(200, 40))) {
-                if (platform::restoreMicrophone(ui.state.original_mic_id)) {
-                    ui.mode = GuardianMode::RESULT_SUCCESS;
-                    ui.message = "Microphone restored successfully!";
-                    GuardianStateManager::deleteState();
-                } else {
-                    ui.mode = GuardianMode::RESULT_FAILED;
-                    ui.message = "Automatic restoration failed. Please check your settings.";
-                }
+            ImGui::TextWrapped("%s", ui.message.c_str());
+            
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+            
+            if (ImGui::Button("Dump Log", ImVec2(140, 30))) {
+                dumpLog(ui);
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("View Log", ImVec2(140, 30))) {
+                viewLog();
+            }
+            
+            ImGui::Spacing();
+            if (ImGui::Button("Close", ImVec2(120, 40))) {
+                ui.shouldExit = true;
             }
             break;
 
@@ -224,6 +281,27 @@ int main(int argc, char* argv[]) {
 
     ImGui::StyleColorsDark();
 
+    // Open synchronization events
+    std::cout << "[Guardian] Watchdog active. Using Local Events for sync." << std::endl;
+    
+    // Guardian should be robust against missing events (app might have crashed before creating them) even after host exits
+#ifdef _WIN32
+    // Use the Shared Constants to ensure Host and Guardian speak the same language
+    HANDLE hShutdownEvent = OpenEventA(SYNCHRONIZE, FALSE, GuardianLauncher::SHUTDOWN_EVENT_NAME);
+    HANDLE hRestartEvent = OpenEventA(SYNCHRONIZE, FALSE, GuardianLauncher::RESTART_EVENT_NAME);
+    
+    if (!hShutdownEvent) {
+         // If open failed, maybe it doesn't exist yet (Host startup race?). 
+         // But usually Host creates it before launching Guardian.
+         // If failed due to permissions (Global vs Local), this confirms the issue.
+         // We try to create/open using the constant.
+         hShutdownEvent = CreateEventA(NULL, TRUE, FALSE, GuardianLauncher::SHUTDOWN_EVENT_NAME);
+    }
+    if (!hRestartEvent) {
+         hRestartEvent = CreateEventA(NULL, TRUE, FALSE, GuardianLauncher::RESTART_EVENT_NAME);
+    }
+#endif
+
     // Loop
     while (!glfwWindowShouldClose(window) && !ui.shouldExit) {
         // Monitoring Logic
@@ -232,17 +310,36 @@ int main(int argc, char* argv[]) {
                 // Host died!
                 
 #ifdef _WIN32
-                // Check if it was a normal shutdown
+                bool restartRequested = false;
                 bool normalShutdown = false;
-                HANDLE hEvent = OpenEventA(SYNCHRONIZE, FALSE, "Global\\MoonMicHostShutdown");
-                if (hEvent) {
-                    if (WaitForSingleObject(hEvent, 0) == WAIT_OBJECT_0) {
+                
+                // Check for Restart Signal
+                if (hRestartEvent) {
+                    if (WaitForSingleObject(hRestartEvent, 0) == WAIT_OBJECT_0) {
+                        restartRequested = true;
+                    }
+                }
+                
+                // Check for Normal Shutdown Signal
+                if (hShutdownEvent) {
+                    if (WaitForSingleObject(hShutdownEvent, 0) == WAIT_OBJECT_0) {
                         normalShutdown = true;
                     }
-                    CloseHandle(hEvent);
                 }
 
-                if (normalShutdown) {
+                if (restartRequested) {
+                    // Restart requested: Relaunch host and exit guardian
+                    std::cout << "[Guardian] Restart requested. Relaunching host..." << std::endl;
+                    
+                    // Get host path (we are in same dir)
+                    char exePath[MAX_PATH];
+                    GetModuleFileNameA(NULL, exePath, MAX_PATH);
+                    std::filesystem::path hostPath = std::filesystem::path(exePath).parent_path() / "moonmic-host.exe";
+                    
+                    ShellExecuteA(NULL, "open", hostPath.string().c_str(), NULL, NULL, SW_SHOW);
+                    ui.shouldExit = true;
+                    
+                } else if (normalShutdown) {
                     // Normal exit: Restore silently if needed and exit
                     if (GuardianStateManager::readState(ui.state)) {
                         // Restore silently
@@ -254,6 +351,15 @@ int main(int argc, char* argv[]) {
                     // Crash detected: Read state and show window
                     if (GuardianStateManager::readState(ui.state)) {
                         ui.mode = GuardianMode::CRASH_DETECTED;
+                        
+                        // Auto-restore immediately
+                        if (platform::restoreMicrophone(ui.state.original_mic_id)) {
+                            ui.message = "Microphone restored automatically.";
+                            GuardianStateManager::deleteState();
+                        } else {
+                            ui.message = "Automatic restoration failed.";
+                        }
+                        
                         ui.windowVisible = true;
                         glfwShowWindow(window);
                     } else {

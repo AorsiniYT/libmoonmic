@@ -43,12 +43,23 @@ namespace Tooltips {
     // Sunshine Integration
     extern const char* SUNSHINE_AUTO_CONFIG;
     extern const char* SUNSHINE_WEBUI;
+    extern const char* RELOAD_SUNSHINE;
     
     // Guardian System
     extern const char* GUARDIAN_STATUS;
     
     // Debug Options
     extern const char* DEBUG_MODE;
+    extern const char* SPEAKER_MODE;
+    
+    // Configuration
+    extern const char* WHITELIST;
+    extern const char* PORT_CONFIG;
+    extern const char* CHANNELS_CONFIG;
+    
+    // Controls
+    extern const char* PAUSE_RESUME;
+    extern const char* DISPLAY_SETTINGS;
     extern const char* PACKET_STATS;
 }
 

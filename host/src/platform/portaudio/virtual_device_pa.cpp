@@ -1,3 +1,19 @@
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <initguid.h>
+#include <mmreg.h>
+#include <ks.h>
+#include <ksmedia.h>
+#include <pa_win_wasapi.h>
+
+// Manually define KSDATAFORMAT_SUBTYPE_IEEE_FLOAT if not found in headers
+#ifndef KSDATAFORMAT_SUBTYPE_IEEE_FLOAT
+DEFINE_GUID(KSDATAFORMAT_SUBTYPE_IEEE_FLOAT, 0x00000003, 0x0000, 0x0010, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71);
+#endif
+
+#endif
+
 #include "virtual_device_pa.h"
 #include <iostream>
 #include <cstring>
@@ -24,6 +40,11 @@ void VirtualDevicePortAudio::close() {
         Pa_AbortStream(stream_); // Stop immediately
         Pa_CloseStream(stream_);
         stream_ = nullptr;
+    }
+    
+    if (resampler_) {
+        speex_resampler_destroy(resampler_);
+        resampler_ = nullptr;
     }
 }
 
@@ -102,9 +123,15 @@ bool VirtualDevicePortAudio::init(const std::string& device_name, int sample_rat
     }
 
     if (outputDeviceIndex == -1) {
-        // Fallback to default output
-        outputDeviceIndex = Pa_GetDefaultOutputDevice();
-        std::cout << "[PortAudio] No matching device found. Using system default output." << std::endl;
+        // Fallback to default output ONLY if device_name was empty (Speaker Mode)
+        // If a specific device was requested but not found, FAIL instead of using speakers.
+        if (device_name.empty()) {
+            outputDeviceIndex = Pa_GetDefaultOutputDevice();
+            std::cout << "[PortAudio] No device name specified. Using system default output." << std::endl;
+        } else {
+            std::cerr << "[PortAudio] Could not find output device matching: " << device_name << std::endl;
+            return false;
+        }
     }
 
     const PaDeviceInfo* finalDeviceInfo = Pa_GetDeviceInfo(outputDeviceIndex);
@@ -131,91 +158,96 @@ bool VirtualDevicePortAudio::init(const std::string& device_name, int sample_rat
     // For WDM-KS, Low Latency is often too aggressive causing glitches ("ruidito").
     // Use High Output Latency for stability.
     if (using_wdmks) {
+        // Use High Output Latency for stability as requested
         outputParameters.suggestedLatency = finalDeviceInfo->defaultHighOutputLatency;
-        std::cout << "[PortAudio] WDM-KS: Using High Output Latency for stability: " << outputParameters.suggestedLatency << "s" << std::endl;
+        std::cout << "[PortAudio] WDM-KS: Using High Output Latency: " << outputParameters.suggestedLatency << "s" << std::endl;
     } else {
         outputParameters.suggestedLatency = finalDeviceInfo->defaultLowOutputLatency;
     }
     
     outputParameters.hostApiSpecificStreamInfo = NULL;
 
-    
-    // For WDM-KS, match the detected system rate.
-    // Now that we represent samples as Int16, 44100Hz might work correctly (unlike Float32).
-    int initial_rate = sample_rate;
-    if (using_wdmks) {
-        initial_rate = (int)finalDeviceInfo->defaultSampleRate;
-        std::cout << "[PortAudio] WDM-KS: detected system rate: " << initial_rate << "Hz. Using it." << std::endl;
+    // Determine target format
+    int target_rate = (int)finalDeviceInfo->defaultSampleRate;
+    int target_channels = output_channels;
+    PaSampleFormat target_format = paInt16;
+    is_float_ = false;
+
+#ifdef _WIN32
+    // Use PortAudio WASAPI extensions to read driver info precisely
+    const PaHostApiInfo* hostApiInfo = Pa_GetHostApiInfo(finalDeviceInfo->hostApi);
+    if (hostApiInfo && hostApiInfo->type == paWASAPI) {
+        WAVEFORMATEXTENSIBLE wfx;
+        int bytes = PaWasapi_GetDeviceDefaultFormat(&wfx, sizeof(wfx), outputDeviceIndex);
+        if (bytes > 0) {
+            target_rate = wfx.Format.nSamplesPerSec;
+            target_channels = wfx.Format.nChannels;
+            
+            // Shared mode WASAPI is almost always Float32
+            if (wfx.Format.wFormatTag == WAVE_FORMAT_EXTENSIBLE) {
+                if (wfx.SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT) {
+                    target_format = paFloat32;
+                    is_float_ = true;
+                }
+            } else if (wfx.Format.wFormatTag == WAVE_FORMAT_IEEE_FLOAT) {
+                target_format = paFloat32;
+                is_float_ = true;
+            }
+
+            std::cout << "[PortAudio] Precise WASAPI format: " 
+                      << target_rate << "Hz, " << target_channels << "ch, "
+                      << (is_float_ ? "Float32" : "Int16") << std::endl;
+        }
     }
+#endif
+
+    source_sample_rate_ = sample_rate;
+    if (source_sample_rate_ <= 0) source_sample_rate_ = target_rate;
+
+    outputParameters.sampleFormat = target_format;
+    outputParameters.channelCount = target_channels;
+    channels_ = target_channels;
 
     // Initialize Ring Buffer (0.8 seconds / 800ms)
-    // Increased to 0.8s to handle clock drift/jitter at 44100Hz which causes "ruiditos" (overflows).
-    rb_size_ = output_channels * initial_rate * 0.8; 
+    rb_size_ = target_channels * target_rate * 0.8; 
     ring_buffer_.resize(rb_size_, 0.0f);
     rb_read_pos_ = 0;
     rb_write_pos_ = 0;
     
     // WDM-KS often requires explicit buffer size
+    // Use 1024 frames for stability
     unsigned long frames_per_buffer = using_wdmks ? 1024 : paFramesPerBufferUnspecified;
     if (using_wdmks) {
         std::cout << "[PortAudio] WDM-KS: using explicit buffer size (1024 frames)" << std::endl;
     }
 
-    // Try opening with initial sample rate in CALLBACK MODE
+    // Try opening with the PRECISE native format
     PaError err = Pa_OpenStream(
         &stream_,
         NULL,
         &outputParameters,
-        (double)initial_rate,
+        (double)target_rate,
         frames_per_buffer,
         paNoFlag, 
-        paCallback, // Use Callback
-        this        // Pass 'this' as userData
+        paCallback,
+        this
     );
     
     if (err == paNoError) {
-        actual_sample_rate_ = initial_rate;
-    }
-    
-    // Fallback: Try different sample rates
-    if (err != paNoError) {
-        std::cerr << "[PortAudio] Failed to open at " << initial_rate << "Hz: " << Pa_GetErrorText(err) << std::endl;
-        
-        std::vector<int> rates_to_try;
-        if (using_wdmks) {
-            // For WDM-KS, try other common rates
-            rates_to_try = {96000, 48000, 44100}; 
-        } else {
-            // For WASAPI, try common rates including 16kHz (common for voice/comms apps)
-            rates_to_try = {48000, 44100, 16000};
-        }
-        
-        for (int r : rates_to_try) {
-            if (r == sample_rate) continue;
-            
-            std::cout << "[PortAudio] Trying fallback rate: " << r << "Hz..." << std::endl;
-            err = Pa_OpenStream(
-                &stream_,
-                NULL,
-                &outputParameters,
-                (double)r,
-                frames_per_buffer,
-                paNoFlag,
-                paCallback,
-                this
-            );
-            if (err == paNoError) {
-                actual_sample_rate_ = r;
-                std::cout << "[PortAudio] Success with " << r << "Hz" << std::endl;
-                break;
-            }
-        }
-    }
-
-    if (err != paNoError) {
-        std::cerr << "[PortAudio] Fatal: Could not open stream. " << Pa_GetErrorText(err) << std::endl;
+        actual_sample_rate_ = target_rate;
+    } else {
+        std::cerr << "[PortAudio] Fatal: Could not open stream with precise format: " << Pa_GetErrorText(err) << std::endl;
         stream_ = nullptr;
         return false;
+    }
+
+    if (actual_sample_rate_ != source_sample_rate_) {
+        std::cout << "[PortAudio] Resampling required: " << source_sample_rate_ << "Hz -> " << actual_sample_rate_ << "Hz" << std::endl;
+        int resampler_err;
+        resampler_ = speex_resampler_init(target_channels, source_sample_rate_, actual_sample_rate_, 3, &resampler_err);
+        if (!resampler_) {
+            std::cerr << "[PortAudio] Failed to initialize Speex resampler: " << resampler_err << std::endl;
+        }
     }
 
     err = Pa_StartStream(stream_);
@@ -226,7 +258,7 @@ bool VirtualDevicePortAudio::init(const std::string& device_name, int sample_rat
         return false;
     }
 
-    std::cout << "[PortAudio] Stream started successfully @ " << actual_sample_rate_ << "Hz" << std::endl;
+    std::cout << "[PortAudio] Stream started successfully @ " << actual_sample_rate_ << "Hz (" << target_channels << "ch)" << std::endl;
     return true;
 }
 float VirtualDevicePortAudio::getBufferUsage() const {
@@ -254,39 +286,60 @@ bool VirtualDevicePortAudio::write(const float* data, size_t frames, int channel
 
     // Prepare data to write (handle mono->stereo conversion if needed)
     const float* write_ptr = data;
-    std::vector<float> temp_buffer;
-    size_t samples_to_write = frames * channels;
+    std::vector<float> mono_to_stereo_buffer;
+    size_t in_frames = frames;
+    int in_channels = channels;
 
-    if (channels == 1 && channels_ == 2) {
-        samples_to_write = frames * 2;
-        temp_buffer.resize(samples_to_write);
+    if (in_channels != channels_) {
+        mono_to_stereo_buffer.resize(frames * channels_);
         for (size_t i = 0; i < frames; i++) {
-            temp_buffer[i * 2] = data[i];
-            temp_buffer[i * 2 + 1] = data[i];
+            for (int ch = 0; ch < channels_; ch++) {
+                // If we have input for this channel, use it. Otherwise, repeat first/last?
+                // Simplest: Repeat mono to all, or L/R to all pairs.
+                if (in_channels == 1) {
+                    mono_to_stereo_buffer[i * channels_ + ch] = data[i];
+                } else if (in_channels == 2) {
+                    mono_to_stereo_buffer[i * channels_ + ch] = data[i * 2 + (ch % 2)];
+                } else {
+                    // Fallback for other cases
+                    mono_to_stereo_buffer[i * channels_ + ch] = (ch < in_channels) ? data[i * in_channels + ch] : 0.0f;
+                }
+            }
         }
-        write_ptr = temp_buffer.data();
-    } else if (channels != channels_) {
-        // Channel mismatch not handled for other cases yet
-        return false;
+        write_ptr = mono_to_stereo_buffer.data();
+        in_channels = channels_;
     }
+
+    // Handle resampling
+    std::vector<float> resampled_buffer;
+    if (resampler_) {
+        // Calculate output frames (approximate but should be safe with a bit of extra)
+        // Actual output might be slightly more/less due to fractional ratio
+        spx_uint32_t out_frames = (frames * actual_sample_rate_ / source_sample_rate_) + 10;
+        resampled_buffer.resize(out_frames * channels_);
+        
+        spx_uint32_t in_len = (spx_uint32_t)frames;
+        spx_uint32_t out_len = (spx_uint32_t)out_frames;
+        
+        speex_resampler_process_interleaved_float(resampler_, write_ptr, &in_len, resampled_buffer.data(), &out_len);
+        
+        write_ptr = resampled_buffer.data();
+        in_frames = out_len;
+    }
+
+    size_t samples_to_write = in_frames * channels_;
 
     std::lock_guard<std::mutex> lock(mutex_);
 
-    // Check available space
+    // Push data to ring buffer
     size_t write_pos = rb_write_pos_;
     size_t read_pos = rb_read_pos_;
     size_t size = rb_size_;
-    
-    // Calculate available space
-    // Simple logic: we can write until we hit read_pos - 1
-    // (using size - 1 capacity to distinguish empty vs full)
-    
-    // Push data to ring buffer
+
     for (size_t i = 0; i < samples_to_write; i++) {
         size_t next_write_pos = (write_pos + 1) % size;
         if (next_write_pos == read_pos) {
-            // Buffer full, drop remaining samples (or overwrite old ones? better to drop for real-time)
-             std::cerr << "[PortAudio] Ring buffer overflow!" << std::endl;
+             // std::cerr << "[PortAudio] Ring buffer overflow!" << std::endl;
              break;
         }
         ring_buffer_[write_pos] = write_ptr[i];
@@ -314,29 +367,33 @@ int VirtualDevicePortAudio::paCallback(const void* inputBuffer, void* outputBuff
     
     size_t samples_read = 0;
     
-    // Fill output buffer from ring buffer (convert Float -> Int16)
-    while (samples_read < samples_needed) {
-        if (read_pos == write_pos) {
-            // Buffer empty
-            break;
+    // Fill output buffer from ring buffer (convert Float -> Target)
+    if (device->is_float_) {
+        float* out = static_cast<float*>(outputBuffer);
+        while (samples_read < samples_needed) {
+            if (read_pos == write_pos) break;
+            out[samples_read++] = device->ring_buffer_[read_pos];
+            read_pos = (read_pos + 1) % size;
         }
-        
-        float val = device->ring_buffer_[read_pos];
-        // Clip and convert
-        if (val > 1.0f) val = 1.0f;
-        if (val < -1.0f) val = -1.0f;
-        out[samples_read++] = static_cast<int16_t>(val * 32767.0f);
-        
-        read_pos = (read_pos + 1) % size;
+        if (samples_read < samples_needed) {
+            std::memset(out + samples_read, 0, (samples_needed - samples_read) * sizeof(float));
+        }
+    } else {
+        int16_t* out = static_cast<int16_t*>(outputBuffer);
+        while (samples_read < samples_needed) {
+            if (read_pos == write_pos) break;
+            float val = device->ring_buffer_[read_pos];
+            if (val > 1.0f) val = 1.0f;
+            if (val < -1.0f) val = -1.0f;
+            out[samples_read++] = static_cast<int16_t>(val * 32767.0f);
+            read_pos = (read_pos + 1) % size;
+        }
+        if (samples_read < samples_needed) {
+            std::memset(out + samples_read, 0, (samples_needed - samples_read) * sizeof(int16_t));
+        }
     }
     
     device->rb_read_pos_ = read_pos;
-    
-    // Pad with silence if not enough data
-    if (samples_read < samples_needed) {
-        std::memset(out + samples_read, 0, (samples_needed - samples_read) * sizeof(int16_t));
-    }
-    
     return paContinue;
 }
 

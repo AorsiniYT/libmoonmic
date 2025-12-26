@@ -4,6 +4,7 @@
  */
 
 #include "config.h"
+#include "logger.h"
 #include "audio_receiver.h"
 #include "sunshine_integration.h"
 #include "display_manager.h"
@@ -19,6 +20,7 @@
 #include <csignal>
 #include <thread>
 #include <chrono>
+#include <future>
 
 #ifdef _WIN32
 #include "platform/windows/driver_installer.h"
@@ -44,6 +46,8 @@ static bool g_running = true;
 static AudioReceiver* g_receiver = nullptr;
 // Global debug flag (verbose logging) - non-static for external linkage
 bool g_debug_mode = false;
+// Global flag for restart request
+static bool g_restart_requested = false;
 
 #ifdef USE_IMGUI
 // Version update checker state
@@ -70,6 +74,13 @@ void renderGUI(GLFWwindow* window, AudioReceiver& receiver, SunshineIntegration&
                SunshineWebUI& sunshine_webui, DisplayManager& display_mgr, 
                DisplaySettingsGUI& display_settings_gui, SunshineSettingsGUI& sunshine_settings_gui,
                DebugGUI& debug_gui, Config& config) {
+    
+    // Async Uninstall/Install State
+    static std::future<bool> uninstall_future;
+    static bool is_uninstalling = false;
+    static std::future<bool> install_future;
+    static bool is_installing = false;
+
     // Use full viewport size for main window
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(viewport->WorkPos);
@@ -102,6 +113,52 @@ void renderGUI(GLFWwindow* window, AudioReceiver& receiver, SunshineIntegration&
     // Driver selection (VB-Cable vs Steam)
     static int selected_driver = 0; // 0 = VB-Cable, 1 = Steam Streaming Microphone (WDM-KS)
     const char* driver_names[] = { "VB-CABLE", "Steam Streaming Microphone (WDM-KS)" };
+    
+    // Check Async Operation Status (Moved here to ensure variables are initialized)
+    if (is_installing && install_future.valid()) {
+        auto status = install_future.wait_for(std::chrono::milliseconds(0));
+        if (status == std::future_status::ready) {
+            bool result = install_future.get();
+            is_installing = false;
+            
+            // Close the progress popup (Installing Driver)
+            // We assume it is open. calling CloseCurrentPopup from here closes the top-most popup.
+            ImGui::CloseCurrentPopup();
+            
+            if (result) {
+                 // Update config to use the new driver
+                selected_driver = 1; // Steam
+                config.audio.driver_device_name = "Steam Streaming Microphone";
+                config.audio.recording_endpoint_name = "Steam Streaming Microphone";
+                
+                std::string config_path = Config::getDefaultConfigPath();
+                config.save(config_path);
+                
+                std::cout << "[Main] Driver installed. Prompting for restart..." << std::endl;
+                
+                ImGui::OpenPopup("Install Success");
+            } else {
+                ImGui::OpenPopup("Install Failed");
+            }
+        }
+    }
+
+    if (is_uninstalling && uninstall_future.valid()) {
+        auto status = uninstall_future.wait_for(std::chrono::milliseconds(0));
+        if (status == std::future_status::ready) {
+            bool result = uninstall_future.get();
+            is_uninstalling = false;
+            
+            // Close the progress popup
+            ImGui::CloseCurrentPopup();
+            
+            if (result) {
+                ImGui::OpenPopup("Uninstall Success");
+            } else {
+                ImGui::OpenPopup("Uninstall Failed");
+            }
+        }
+    }
     
     // Auto-detect which driver is selected based on config
     if (config.audio.driver_device_name.find("VB-Audio") != std::string::npos) {
@@ -153,7 +210,7 @@ void renderGUI(GLFWwindow* window, AudioReceiver& receiver, SunshineIntegration&
     if (selected_driver == 0) {
         driver_installed = installer.isVBCableInstalled();
     } else {
-        driver_installed = installer.isSteamSpeakersInstalled();
+        driver_installed = installer.isSteamMicrophoneInstalled();
     }
     
     // Show driver status
@@ -190,17 +247,20 @@ void renderGUI(GLFWwindow* window, AudioReceiver& receiver, SunshineIntegration&
             if (!DriverInstaller::isRunningAsAdmin()) {
                 ImGui::OpenPopup("Need Admin");
             } else {
-                bool success = false;
                 if (selected_driver == 0) {
-                    success = installer.installVBCable();
+                    // VB-Cable install (still sync for now as it runs an external installer GUI)
+                    if (installer.installVBCable()) {
+                        ImGui::OpenPopup("Install Success");
+                    } else {
+                        ImGui::OpenPopup("Install Failed");
+                    }
                 } else {
-                    success = installer.installSteamSpeakers();
-                }
-                
-                if (success) {
-                    ImGui::OpenPopup("Install Success");
-                } else {
-                    ImGui::OpenPopup("Install Failed");
+                    // Steam Driver Async Install
+                    is_installing = true;
+                    ImGui::OpenPopup("Installing Driver");
+                    install_future = std::async(std::launch::async, [&installer]() {
+                        return installer.installSteamMicrophone();
+                    });
                 }
             }
         }
@@ -216,7 +276,7 @@ void renderGUI(GLFWwindow* window, AudioReceiver& receiver, SunshineIntegration&
             
             // --- Steam Streaming Speakers Section ---
             ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.5f, 1.0f), "Steam Streaming Microphone (Recommended)");
-            bool steam_installed = installer.isSteamSpeakersInstalled();
+            bool steam_installed = installer.isSteamMicrophoneInstalled();
             
             if (steam_installed) {
                 ImGui::TextColored(ImVec4(0, 1, 0, 1), "Status: Installed");
@@ -231,11 +291,14 @@ void renderGUI(GLFWwindow* window, AudioReceiver& receiver, SunshineIntegration&
                         receiver.stop();
                         std::cout << "[Main] Stopped audio receiver for driver uninstall" << std::endl;
                         
-                         if (installer.uninstallSteamSpeakers()) {
-                            ImGui::OpenPopup("Uninstall Success");
-                        } else {
-                            ImGui::OpenPopup("Uninstall Failed");
-                        }
+                        // Start async uninstall
+                        is_uninstalling = true;
+                        ImGui::OpenPopup("Uninstalling Driver");
+                        
+                        // Launch in background
+                        uninstall_future = std::async(std::launch::async, [&installer]() {
+                            return installer.uninstallSteamMicrophone();
+                        });
                     }
                 }
             } else {
@@ -244,11 +307,11 @@ void renderGUI(GLFWwindow* window, AudioReceiver& receiver, SunshineIntegration&
                     if (!DriverInstaller::isRunningAsAdmin()) {
                         ImGui::OpenPopup("Need Admin");
                     } else {
-                        if (installer.installSteamSpeakers()) {
-                            ImGui::OpenPopup("Install Success");
-                        } else {
-                            ImGui::OpenPopup("Install Failed");
-                        }
+                        is_installing = true;
+                        ImGui::OpenPopup("Installing Driver");
+                        install_future = std::async(std::launch::async, [&installer]() {
+                            return installer.installSteamMicrophone();
+                        });
                     }
                 }
             }
@@ -342,14 +405,14 @@ void renderGUI(GLFWwindow* window, AudioReceiver& receiver, SunshineIntegration&
         
         if (ImGui::Button("Install Steam Driver (Recommended)", ImVec2(300, 40))) {
              if (!DriverInstaller::isRunningAsAdmin()) {
-                ImGui::OpenPopup("Need Admin"); // Nested popup might be tricky, better to just show text or close this one
+                ImGui::OpenPopup("Need Admin"); 
              } else {
-                 if (installer.installSteamSpeakers()) {
-                     ImGui::CloseCurrentPopup();
-                     ImGui::OpenPopup("Install Success");
-                 } else {
-                     ImGui::OpenPopup("Install Failed");
-                 }
+                 ImGui::CloseCurrentPopup(); // Close wizard
+                 is_installing = true;
+                 ImGui::OpenPopup("Installing Driver"); // Open progress
+                 install_future = std::async(std::launch::async, [&installer]() {
+                    return installer.installSteamMicrophone();
+                 });
              }
         }
         
@@ -407,21 +470,14 @@ void renderGUI(GLFWwindow* window, AudioReceiver& receiver, SunshineIntegration&
         ImGui::Separator();
         ImGui::Spacing();
         
-        ImGui::TextWrapped("A system reboot is required for the driver to take effect.");
+        ImGui::TextWrapped("The application needs to restart to initialize the new driver.");
+        ImGui::TextWrapped("This will happen automatically via the Guardian process.");
         ImGui::Spacing();
-        ImGui::TextColored(ImVec4(1, 1, 0, 1), "Do you want to restart now?");
-        ImGui::Spacing();
         
-        if (ImGui::Button("Reboot Now", ImVec2(120, 0))) {
-            #ifdef _WIN32
-            system("shutdown /r /t 5 /c \"Rebooting to complete driver installation...\"");
-            #endif
-            ImGui::CloseCurrentPopup();
-        }
-        
-        ImGui::SameLine();
-        
-        if (ImGui::Button("Later", ImVec2(120, 0))) {
+        if (ImGui::Button("Restart Application", ImVec2(180, 40))) {
+            std::cout << "[Main] User requested restart. Signaling Guardian..." << std::endl;
+            moonmic::GuardianLauncher::signalRestart();
+            glfwSetWindowShouldClose(window, GLFW_TRUE);
             ImGui::CloseCurrentPopup();
         }
         
@@ -431,6 +487,70 @@ void renderGUI(GLFWwindow* window, AudioReceiver& receiver, SunshineIntegration&
     // Installation failed popup
     if (ImGui::BeginPopupModal("Install Failed", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::Text("Failed to install driver.");
+        ImGui::Text("Please check the console for error details.");
+        ImGui::Separator();
+        
+        if (ImGui::Button("OK", ImVec2(120, 0))) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    // Install Progress Popup
+    if (ImGui::BeginPopupModal("Installing Driver", NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
+        ImGui::Text("Installing Steam Streaming Microphone...");
+        ImGui::Text("Please wait, this may take a few moments.");
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+        
+        // Simple spinner animation
+        ImGui::Text("Working... %c", "|/-\\"[(int)(ImGui::GetTime() / 0.05f) & 3]);
+        
+        // Check status
+        // Logic moved to main scope to prevent popup closure issues
+        // if (is_installing && install_future.valid()) { ... }
+        
+        ImGui::EndPopup();
+    }
+
+    // Uninstall Progress Popup
+    if (ImGui::BeginPopupModal("Uninstalling Driver", NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
+        ImGui::Text("Uninstalling Steam Streaming Microphone...");
+        ImGui::Text("Please wait, this may take a few moments.");
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+        
+        // Simple spinner animation
+        ImGui::Text("Working... %c", "|/-\\"[(int)(ImGui::GetTime() / 0.05f) & 3]);
+        
+        // Check status
+        // Logic moved to main scope
+        // if (is_uninstalling && uninstall_future.valid()) { ... }
+        
+        ImGui::EndPopup();
+    }
+
+    // Uninstall Success Popup
+    if (ImGui::BeginPopupModal("Uninstall Success", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextColored(ImVec4(0, 1, 0, 1), "Driver uninstalled successfully!");
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+        
+        ImGui::TextWrapped("The driver has been removed from your system.");
+        ImGui::Spacing();
+        
+        if (ImGui::Button("OK", ImVec2(120, 0))) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    // Uninstall Failed Popup
+    if (ImGui::BeginPopupModal("Uninstall Failed", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Failed to uninstall driver.");
         ImGui::Text("Please check the console for error details.");
         ImGui::Separator();
         
@@ -458,6 +578,7 @@ void renderGUI(GLFWwindow* window, AudioReceiver& receiver, SunshineIntegration&
             if (ImGui::Button("Sunshine Settings")) {
                 sunshine_settings_gui.open();
             }
+            ShowHelpTooltip(Tooltips::SUNSHINE_WEBUI);
         } else {
             // Paired but not logged in
             ImGui::TextColored(ImVec4(1, 1, 0, 1), "Web UI: Not logged in");
@@ -466,6 +587,7 @@ void renderGUI(GLFWwindow* window, AudioReceiver& receiver, SunshineIntegration&
             if (ImGui::Button("Login to Sunshine Web UI")) {
                 ImGui::OpenPopup("Sunshine Web UI Login");
             }
+            ShowHelpTooltip(Tooltips::SUNSHINE_WEBUI);
             
             // Web UI login modal
             ImVec2 center = ImGui::GetMainViewport()->GetCenter();
@@ -610,6 +732,7 @@ void renderGUI(GLFWwindow* window, AudioReceiver& receiver, SunshineIntegration&
             config_changed = true;
         }
     }
+    ShowHelpTooltip(Tooltips::PORT_CONFIG);
     
     // Sample rate is now auto-detected from the audio device
     // No manual override needed - system uses device's native rate
@@ -623,6 +746,7 @@ void renderGUI(GLFWwindow* window, AudioReceiver& receiver, SunshineIntegration&
             config_changed = true;
         }
     }
+    ShowHelpTooltip(Tooltips::CHANNELS_CONFIG);
     
     // Auto-save if any config changed
     if (config_changed) {
@@ -643,6 +767,7 @@ void renderGUI(GLFWwindow* window, AudioReceiver& receiver, SunshineIntegration&
             }
         }
     }
+    ShowHelpTooltip(Tooltips::WHITELIST);
     
     // Speaker Mode checkbox (for debugging)
     bool prev_speaker = config.audio.use_speaker_mode;
@@ -661,6 +786,7 @@ void renderGUI(GLFWwindow* window, AudioReceiver& receiver, SunshineIntegration&
             }
         }
     }
+    ShowHelpTooltip(Tooltips::SPEAKER_MODE);
     if (config.audio.use_speaker_mode) {
         ImGui::TextColored(ImVec4(1, 0.8f, 0, 1), "Warning: Audio goes to speakers, NOT VB-Cable");
     } else {
@@ -805,6 +931,7 @@ void renderGUI(GLFWwindow* window, AudioReceiver& receiver, SunshineIntegration&
         // Toggle console visibility with debug mode
         DebugGUI::showConsole(g_debug_mode);
     }
+    ShowHelpTooltip(Tooltips::DEBUG_MODE);
     ImGui::SameLine();
     ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1), "Shows console & detailed logs");
     
@@ -821,41 +948,71 @@ void renderGUI(GLFWwindow* window, AudioReceiver& receiver, SunshineIntegration&
     
     ImGui::Separator();
     
-    // Pause/Resume controls
-    // Note: Receiver auto-starts on launch, no manual start/stop needed
-    if (receiver.isPaused()) {
-        if (ImGui::Button("Resume", ImVec2(120, 30))) {
-            receiver.resume();
-        }
-        ImGui::SameLine();
-        ImGui::TextColored(ImVec4(1, 0.8f, 0, 1), "Paused");
-    } else {
-        if (ImGui::Button("Pause", ImVec2(120, 30))) {
-            receiver.pause();
-        }
-        ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0, 1, 0, 1), "Active");
-    }
-    
-    ImGui::SameLine();
-    
-    if (ImGui::Button("Reload Sunshine")) {
-        sunshine.reload();
-        
-        // Update allowed_clients in config with Sunshine paired clients
-        ImGui::TextColored(ImVec4(0, 1, 0, 1), "Paired with Sunshine");
-        
-        std::string config_path = Config::getDefaultConfigPath();
-            if (config.save(config_path)) {
-                    std::cout << "[Config] Auto-saved Sunshine client list" << std::endl;
+    if (receiver.isRunning()) {
+        // Pause/Resume controls
+        // Note: Receiver auto-starts on launch, no manual start/stop needed
+        if (receiver.isPaused()) {
+            if (ImGui::Button("Resume", ImVec2(120, 30))) {
+                receiver.resume();
             }
-    }
-    
-    ImGui::SameLine();
-    
-    // Display Settings button  
-    if (ImGui::Button("Display Settings")) {
-        display_settings_gui.open();
+            ShowHelpTooltip(Tooltips::PAUSE_RESUME);
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1, 0.8f, 0, 1), "Paused");
+        } else {
+            if (ImGui::Button("Pause", ImVec2(120, 30))) {
+                receiver.pause();
+            }
+            ShowHelpTooltip(Tooltips::PAUSE_RESUME);
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(0, 1, 0, 1), "Active");
+        }
+        
+        ImGui::SameLine();
+        
+        if (ImGui::Button("Reload Sunshine")) {
+            sunshine.reload();
+            
+            // Update allowed_clients in config with Sunshine paired clients
+            ImGui::TextColored(ImVec4(0, 1, 0, 1), "Paired with Sunshine");
+            
+            std::string config_path = Config::getDefaultConfigPath();
+                if (config.save(config_path)) {
+                        std::cout << "[Config] Auto-saved Sunshine client list" << std::endl;
+                }
+        }
+        ShowHelpTooltip(Tooltips::RELOAD_SUNSHINE);
+        
+        ImGui::SameLine();
+        
+        // Display Settings button  
+        if (ImGui::Button("Display Settings")) {
+            display_settings_gui.open();
+        }
+        ShowHelpTooltip(Tooltips::DISPLAY_SETTINGS);
+    } else {
+        // Receiver failed to start (likely missing driver or audio init failed)
+        ImGui::Spacing();
+        ImGui::TextColored(ImVec4(1, 0, 0, 1), "⚠ Receiver is NOT running");
+        ImGui::Spacing();
+        
+#ifdef _WIN32
+        if (driver_installed) {
+             ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "Driver detected but audio skipped.");
+             ImGui::TextWrapped("The application needs to restart to initialize the audio engine with the new driver.");
+             
+             if (ImGui::Button("Restart Application", ImVec2(200, 30))) {
+                 std::cout << "[Main] User requested restart. Signaling Guardian..." << std::endl;
+                 g_restart_requested = true;
+                 moonmic::GuardianLauncher::signalRestart();
+                 glfwSetWindowShouldClose(window, GLFW_TRUE);
+             }
+        } else {
+             ImGui::TextWrapped("Please install the Virtual Audio Driver first to start.");
+        }
+#else
+        ImGui::TextWrapped("Check your audio device configuration.");
+        ImGui::TextWrapped("Ensure your microphone is accessible.");
+#endif
     }
     
     
@@ -960,6 +1117,18 @@ void renderGUI(GLFWwindow* window, AudioReceiver& receiver, SunshineIntegration&
         ImGui::EndPopup();
     }
     
+    // Ensure popups are opened at the root level if requested
+    if (is_installing) {
+        if (!ImGui::IsPopupOpen("Installing Driver")) {
+            ImGui::OpenPopup("Installing Driver");
+        }
+    }
+    if (is_uninstalling) {
+        if (!ImGui::IsPopupOpen("Uninstalling Driver")) {
+            ImGui::OpenPopup("Uninstalling Driver");
+        }
+    }
+
     ImGui::End();
 }
 
@@ -983,7 +1152,7 @@ int main_gui(int argc, char* argv[]) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     
-    GLFWwindow* window = glfwCreateWindow(600, 650, "MoonMic host by AorsiniYT", NULL, NULL);
+    GLFWwindow* window = glfwCreateWindow(600, 700, "MoonMic host by AorsiniYT", NULL, NULL);
     if (!window) {
         std::cerr << "Failed to create window" << std::endl;
         glfwTerminate();
@@ -1093,6 +1262,21 @@ int main_gui(int argc, char* argv[]) {
     DebugGUI::showConsole(g_debug_mode);
     
     // Auto-start receiver (always enabled - host is server mode)
+    
+#ifdef _WIN32
+    // Ensure driver is ENABLED before starting (fixes cases where it's installed but disabled)
+    if (moonmic::platform::windows::IsRunningAsAdmin()) {
+        std::string driverName = config.audio.driver_device_name;
+        if (!driverName.empty()) {
+             // Only try to enable if it looks like a driver we manage
+             if (driverName.find("Steam") != std::string::npos || driverName.find("VB-") != std::string::npos) {
+                 std::cout << "[Main] Ensuring driver is enabled: " << driverName << std::endl;
+                 moonmic::platform::windows::ChangeDeviceState(driverName, true);
+             }
+        }
+    }
+#endif
+
     std::cout << "[Main] Starting receiver..." << std::endl;
     if (!receiver.start(config)) {
         std::cerr << "[Main] Failed to start receiver" << std::endl;
@@ -1186,13 +1370,18 @@ int main_gui(int argc, char* argv[]) {
     receiver.stop();
     
 #ifdef _WIN32
-    // Signal normal shutdown to guardian
-    GuardianLauncher::signalNormalShutdown();
+    // If restarting, do NOT signal normal shutdown, so Guardian sees only the Restart event (or lack of Shutdown event)
+    // Actually Guardian prioritizes Restart event anyway, but this is cleaner.
+    if (!g_restart_requested) {
+        // Signal normal shutdown to guardian
+        GuardianLauncher::signalNormalShutdown();
+    }
 #endif
     
 #ifdef _WIN32
-    // Disable driver on exit
-    if (config.audio.auto_set_default_mic) {
+    // Disable driver on exit ONLY if putting computer to sleep/shutdown effectively (Normal Exit)
+    // If restarting, keep driver enabled to avoid toggle-spam and potential race conditions
+    if (!g_restart_requested && config.audio.auto_set_default_mic) {
         if (moonmic::platform::windows::IsRunningAsAdmin()) {
              // First restore default mic if currently on virtual
              // This is handled by receiver.stop() usually, but ensure it just in case
@@ -1201,11 +1390,6 @@ int main_gui(int argc, char* argv[]) {
                  config.audio.original_mic_id = "";
                  config.save(Config::getDefaultConfigPath());
              }
-           if (moonmic::platform::windows::IsRunningAsAdmin()) {
-            std::cout << "[Main] Enabling Virtual Device Driver: " << config.audio.driver_device_name << std::endl;
-            // Intenta habilitar el driver al inicio para que esté listo
-            moonmic::platform::windows::ChangeDeviceState(config.audio.driver_device_name, true);
-        }
             
             std::cout << "[Main] Disabling Virtual Device Driver..." << std::endl;
             moonmic::platform::windows::ChangeDeviceState(config.audio.driver_device_name, false);
@@ -1324,6 +1508,9 @@ int main_console(int argc, char* argv[]) {
 }
 
 int main(int argc, char* argv[]) {
+    // Initialize logger immediately
+    moonmic::Logger::instance().init();
+
     // Immediate output to verify program starts
     std::cout << "moonmic-host starting..." << std::endl;
     std::cout.flush();

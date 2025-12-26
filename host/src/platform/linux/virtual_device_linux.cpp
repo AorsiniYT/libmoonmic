@@ -20,6 +20,12 @@ public:
     }
     
     bool init(const std::string& device_name, int sample_rate, int channels) override {
+        // Handle auto-detect (0) by defaulting to 48000 for now on Linux
+        // TODO: Query PulseAudio server for default sample rate
+        if (sample_rate <= 0) {
+            sample_rate = 48000;
+        }
+        
         sample_rate_ = sample_rate;  // Store for getSampleRate()
         
         pa_sample_spec ss;

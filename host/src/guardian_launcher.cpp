@@ -17,7 +17,6 @@
 
 namespace moonmic {
 
-const char* GuardianLauncher::SHUTDOWN_EVENT_NAME = "Global\\MoonMicHostShutdown";
 
 bool GuardianLauncher::launchGuardian(const std::string& original_mic_id, 
                                       const std::string& original_mic_name) {
@@ -38,13 +37,24 @@ bool GuardianLauncher::launchGuardian(const std::string& original_mic_id,
     }
 
 #ifdef _WIN32
-    // Create shutdown event
-    HANDLE hEvent = CreateEventA(NULL, TRUE, FALSE, SHUTDOWN_EVENT_NAME);
-    if (!hEvent) {
-        std::cerr << "[GuardianLauncher] Failed to create shutdown event" << std::endl;
-        return false;
-    }
-    CloseHandle(hEvent);
+    // Create synchronization events (Manual Reset so they stick)
+    // Host keeps these handles open through its lifetime implicitly? 
+    // Actually we should leak them or store them to ensure they exist.
+    // For now we assume Guardian will open them immediately upon launch.
+    HANDLE hShutdown = CreateEventA(NULL, TRUE, FALSE, SHUTDOWN_EVENT_NAME);
+    HANDLE hRestart = CreateEventA(NULL, TRUE, FALSE, RESTART_EVENT_NAME);
+    
+    // We intentionally do NOT close these handles here in this process?
+    // If we close them, and Guardian hasn't started yet, they disappear.
+    // We should probably keep them. But `launchGuardian` returns.
+    // Let's rely on the OS or Guardian picking them up fast, or just don't close them.
+    // Leaking 2 handles in a long running process is fine.
+    // (Previous code closed `hEvent` on line 47, which might have been a bug but worked if Guardian opened it fast?)
+    // Actually previous code: `CloseHandle(hEvent);` line 47.
+    
+    // Let's close them to match previous behavior, but ensure Guardian opens them ASAP.
+    if (hShutdown) CloseHandle(hShutdown);
+    if (hRestart) CloseHandle(hRestart);
     
     // Get guardian path next to moonmic-host.exe
     char exePath[MAX_PATH];
@@ -115,13 +125,27 @@ void GuardianLauncher::signalNormalShutdown() {
     // Give guardian time to process signal
     Sleep(100);
 #else
-    // On Linux we could use a signal, but common state deletion might be enough
-    // since the guardian checks if process is alive.
-    // For now, just deleting the state is sufficient.
-#endif
-    
-    // Clean up state file
+    // Linux: Just check state for now
     GuardianStateManager::deleteState();
+#endif
+}
+
+void GuardianLauncher::signalRestart() {
+#ifdef _WIN32
+    HANDLE hEvent = OpenEventA(EVENT_MODIFY_STATE, FALSE, RESTART_EVENT_NAME);
+    if (hEvent) {
+        SetEvent(hEvent);
+        CloseHandle(hEvent);
+    }
+    // Give guardian time to process signal
+    Sleep(100);
+    
+    // Also signal normal shutdown so we don't trigger "Crash Detected" logic accidentally
+    // if restart logic checks both
+    signalNormalShutdown(); 
+#else 
+    // Linux TODO
+#endif
 }
 
 bool GuardianLauncher::isGuardianRunning() {

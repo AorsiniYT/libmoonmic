@@ -8,6 +8,13 @@
 #include <iostream>
 #include <propidl.h>
 #include <comdef.h>
+#include <mmreg.h>
+#include <ks.h>
+#include <ksmedia.h>
+
+// Manually define KSDATAFORMAT_SUBTYPE_IEEE_FLOAT for MinGW compatibility if needed
+// 00000003-0000-0010-8000-00AA00389B71
+DEFINE_GUID(KSDATAFORMAT_SUBTYPE_IEEE_FLOAT, 0x00000003, 0x0000, 0x0010, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71);
 
 namespace moonmic {
 
@@ -210,6 +217,107 @@ bool AudioDeviceManager::isVirtualMicrophone(const std::string& device_name) {
            (device_name.find("CABLE Output") != std::string::npos) ||
            (device_name.find("VB-Audio") != std::string::npos && 
             device_name.find("Output") != std::string::npos);
+}
+
+int AudioDeviceManager::getNativeSampleRate(const std::string& device_name, bool is_capture) {
+    NativeAudioFormat format;
+    if (getNativeFormat(device_name, is_capture, format)) {
+        return format.sample_rate;
+    }
+    return 0;
+}
+
+bool AudioDeviceManager::getNativeFormat(const std::string& device_name, bool is_capture, NativeAudioFormat& out_format) {
+    if (!enumerator_) return false;
+
+    EDataFlow dataFlow = is_capture ? eCapture : eRender;
+    IMMDeviceCollection* collection = nullptr;
+    HRESULT hr = enumerator_->EnumAudioEndpoints(dataFlow, DEVICE_STATE_ACTIVE, &collection);
+    if (FAILED(hr)) return false;
+
+    UINT count = 0;
+    collection->GetCount(&count);
+    bool found = false;
+
+    for (UINT i = 0; i < count; i++) {
+        IMMDevice* device = nullptr;
+        hr = collection->Item(i, &device);
+        if (FAILED(hr)) continue;
+
+        IPropertyStore* props = nullptr;
+        device->OpenPropertyStore(STGM_READ, &props);
+        if (props) {
+            bool matched = false;
+            
+            // Check ID first
+            LPWSTR pwszID = NULL;
+            device->GetId(&pwszID);
+            if (pwszID) {
+                int size_needed = WideCharToMultiByte(CP_UTF8, 0, pwszID, -1, NULL, 0, NULL, NULL);
+                std::string id(size_needed, 0);
+                WideCharToMultiByte(CP_UTF8, 0, pwszID, -1, &id[0], size_needed, NULL, NULL);
+                id = id.c_str(); 
+                if (id == device_name) matched = true;
+                CoTaskMemFree(pwszID);
+            }
+
+            // Check Friendly Name if ID did not match
+            if (!matched) {
+                PROPVARIANT varName;
+                PropVariantInit(&varName);
+                props->GetValue(PKEY_Device_FriendlyName, &varName);
+                if (varName.vt == VT_LPWSTR) {
+                    std::wstring wname = varName.pwszVal;
+                    int size_needed = MultiByteToWideChar(CP_UTF8, 0, device_name.c_str(), -1, NULL, 0);
+                    std::wstring wsearch(size_needed, 0);
+                    MultiByteToWideChar(CP_UTF8, 0, device_name.c_str(), -1, &wsearch[0], size_needed);
+                    
+                    if (wname.find(wsearch.c_str()) != std::wstring::npos || device_name.empty()) {
+                        matched = true;
+                    }
+                }
+                PropVariantClear(&varName);
+            }
+
+            if (matched) {
+                PROPVARIANT varFormat;
+                PropVariantInit(&varFormat);
+                hr = props->GetValue(PKEY_AudioEngine_DeviceFormat, &varFormat);
+                if (SUCCEEDED(hr) && varFormat.vt == VT_BLOB) {
+                    if (varFormat.blob.cbSize >= sizeof(WAVEFORMATEX)) {
+                        WAVEFORMATEX* pwfx = reinterpret_cast<WAVEFORMATEX*>(varFormat.blob.pBlobData);
+                        out_format.sample_rate = pwfx->nSamplesPerSec;
+                        out_format.channels = pwfx->nChannels;
+                        out_format.bits_per_sample = pwfx->wBitsPerSample;
+
+                        if (pwfx->wFormatTag == WAVE_FORMAT_EXTENSIBLE) {
+                            WAVEFORMATEXTENSIBLE* pwfxe = reinterpret_cast<WAVEFORMATEXTENSIBLE*>(pwfx);
+                            if (pwfxe->SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT) {
+                                out_format.is_float = true;
+                            }
+                        } else if (pwfx->wFormatTag == WAVE_FORMAT_IEEE_FLOAT) {
+                            out_format.is_float = true;
+                        }
+                        
+                        found = true;
+                        std::cout << "[AudioDeviceManager] Native format for '" << device_name << "': " 
+                                  << out_format.sample_rate << "Hz, " 
+                                  << out_format.channels << "ch, " 
+                                  << out_format.bits_per_sample << "-bit " 
+                                  << (out_format.is_float ? "(float)" : "(int)") << std::endl;
+                    }
+                }
+                PropVariantClear(&varFormat);
+            }
+            props->Release();
+        }
+
+        device->Release();
+        if (found) break;
+    }
+
+    collection->Release();
+    return found;
 }
 
 } // namespace moonmic

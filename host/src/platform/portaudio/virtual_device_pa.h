@@ -4,6 +4,7 @@
 #include <portaudio.h>
 #include <vector>
 #include <mutex>
+#include <speex/speex_resampler.h>
 
 namespace moonmic {
 
@@ -29,6 +30,7 @@ private:
     PaStream* stream_ = nullptr;
     int actual_sample_rate_ = 48000;
     int channels_ = 2; // Output channels
+    bool is_float_ = false; // Output is Float32
     
     // Ring Buffer for Callback Mode
     std::vector<float> ring_buffer_;
@@ -37,6 +39,10 @@ private:
     size_t rb_size_ = 0;
     
     std::mutex mutex_;
+    
+    // Resampling
+    SpeexResamplerState* resampler_ = nullptr;
+    int source_sample_rate_ = 0; // Input rate (from network)
 };
 
 } // namespace moonmic

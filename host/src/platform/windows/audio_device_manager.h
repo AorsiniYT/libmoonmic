@@ -21,6 +21,14 @@ struct AudioDeviceInfo {
     bool is_virtual;          // Is virtual device (Steam/VBCable)
 };
 
+// Precise audio format info from driver
+struct NativeAudioFormat {
+    int sample_rate = 0;      // Hz
+    int channels = 0;         // Channel count
+    int bits_per_sample = 0;  // Bits (16, 24, 32)
+    bool is_float = false;    // True if Float32
+};
+
 // IPolicyConfig interface (undocumented Windows API for changing default device)
 // This interface is used by the Windows Sound Control Panel
 // We define it without DECLSPEC_UUID for MinGW compatibility
@@ -78,6 +86,17 @@ public:
      * @return true if virtual
      */
     static bool isVirtualMicrophone(const std::string& device_name);
+
+    /**
+     * @brief Get precise native audio format from driver
+     * @param device_name Friendly name or ID
+     * @param is_capture True for recording, false for playback
+     * @param out_format Struct to fill with detected format
+     * @return true if successful
+     */
+    bool getNativeFormat(const std::string& device_name, bool is_capture, NativeAudioFormat& out_format);
+
+    int getNativeSampleRate(const std::string& device_name, bool is_capture); // Legacy, kept for compatibility if needed
 
 private:
     IMMDeviceEnumerator* enumerator_ = nullptr;

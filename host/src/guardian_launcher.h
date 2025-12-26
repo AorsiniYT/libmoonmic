@@ -30,13 +30,20 @@ public:
     static void signalNormalShutdown();
     
     /**
+     * @brief Signal guardian to restart the host
+     */
+    static void signalRestart();
+    
+    /**
      * @brief Check if guardian is running
      * @return true if guardian process is active
      */
     static bool isGuardianRunning();
     
-private:
-    static const char* SHUTDOWN_EVENT_NAME;
+    // Internals exposed for Guardian executable
+    // Defined inline to avoid linking issues with Guardian (which doesn't link guardian_launcher.cpp)
+    static constexpr const char* SHUTDOWN_EVENT_NAME = "Local\\MoonMicHostShutdown";
+    static constexpr const char* RESTART_EVENT_NAME = "Local\\MoonMicHostRestart";
 };
 
 } // namespace moonmic

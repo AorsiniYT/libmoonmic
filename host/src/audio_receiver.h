@@ -19,6 +19,7 @@
 #include <atomic>
 #include <cstdint>
 #include <chrono>
+#include <mutex>
 
 namespace moonmic {
 
@@ -93,6 +94,11 @@ private:
     bool applyFallbackDisplayResolution(uint16_t width, uint16_t height);
     void resetConnectionState();
     
+    // Internal helpers that assume mutex is already locked
+    void pauseInternal();
+    void resumeInternal();
+    void sendControlSignalInternal(uint32_t signal_magic);
+
     Config config_;
     std::unique_ptr<SunshineIntegration> sunshine_;
     SunshineWebUI* sunshine_webui_ = nullptr;  // Pointer to WebUI instance
@@ -127,6 +133,8 @@ private:
     static constexpr size_t MAX_FRAMES = 5760;  // 120ms at 48kHz
     float decode_buffer_[MAX_FRAMES * 2];  // Decoded audio at 16kHz
     float resample_buffer_[MAX_FRAMES * 2];  // Resampled audio at 48kHz
+
+    std::mutex audio_mutex_; // Protects virtual_device_ and resampler_
 };
 
 } // namespace moonmic
